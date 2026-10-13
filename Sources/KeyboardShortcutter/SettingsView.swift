@@ -48,6 +48,8 @@ struct SettingsView: View {
             }
             Text(monitoringExplanation)
                 .font(.caption).foregroundStyle(.secondary)
+            Link(FoxodeWebsite.title, destination: FoxodeWebsite.productURL)
+                .font(.caption)
         }
         .padding(20)
         .sheet(item: $editingRule) { rule in

@@ -4,7 +4,7 @@ Apple Silicon Mac 向けの、Swift / SwiftUI 製メニューバーアプリで�
 
 ## ダウンロード
 
-[GitHub Releases の v1.1.0](https://github.com/foxode-app/keyboard-shortcutter/releases/tag/v1.1.0) から `Keyboard-Shortcutter-1.1.0-arm64.dmg` をダウンロードし、アプリを Applications にドラッグしてください。1.1.0はFキーの割り当てとシステム操作を追加したプレビュー版です。対応環境・権限・既知の制限は、この README と [Foxode の製品ページ](https://foxode.com/products/keyboard-shortcutter/) に記載しています。
+[GitHub Releases の v1.1.1](https://github.com/foxode-app/keyboard-shortcutter/releases/tag/v1.1.1) から `Keyboard-Shortcutter-1.1.1-arm64.dmg` をダウンロードし、アプリを Applications にドラッグしてください。1.1.1はメニューバーのメニューと設定画面にFoxodeの製品ページへのリンクを追加したプレビュー版です。対応環境・権限・既知の制限は、この README と [Foxode の製品ページ](https://foxode.com/products/keyboard-shortcutter/) に記載しています。
 
 Releases の DMG がインストール用ファイルです。GitHub が自動生成する「Source code」は、下記の手順でビルドするためのソースコードです。
 
@@ -57,6 +57,8 @@ Foxode からの直接配布を対象にしています。Mac App Store への�
 
 メニューから監視の一時停止・再開、設定、終了を操作できます。「ログイン時に起動」は任意で有効化できます。macOS が承認を求める場合は「一般 → ログイン項目」で確認してください。
 
+メニューバーのキーボードアイコンをクリックまたは右クリックして開くメニューと、設定画面の下部に **「開発者のサイト（Foxodeについて）」** があります。選択すると、既定のブラウザで [Keyboard Shortcutter の個別製品ページ](https://foxode.com/products/keyboard-shortcutter/) を開きます。設定画面では、どのタブを開いていてもリンクを選べます。
+
 ## Fキーに動作を割り当てる
 
 1. 設定の **「Fキー」** タブを開き、F1〜F20の「割り当てる…」を押します。
@@ -90,7 +92,7 @@ Fキーを割り当てる場合、またはOption の動作を無効にする場
 
 「音量・再生・明るさ」と「ショートカット送信」も合成入力のため、アクセシビリティが必要です。これらの機能を利用する場合に、設定画面から明示的に許可してください。Fキーの割り当てとOption抑止がなく、入力ソース切り替え・アプリ起動・URL起動だけであればアクセシビリティは不要です。
 
-入力された文字列は取得・記録・保存せず、判定に必要なキーコードと押下状態のみをメモリで扱います。ネットワーク通信、解析、テレメトリー、管理者権限の要求、シェルコマンド実行はありません。URL アクションで起動したブラウザなどは、通常どおり通信します。
+入力された文字列は取得・記録・保存せず、判定に必要なキーコードと押下状態のみをメモリで扱います。ネットワーク通信、解析、テレメトリー、管理者権限の要求、シェルコマンド実行はありません。URL アクションやFoxodeのリンクで起動したブラウザなどは、通常どおり通信します。
 
 ## 設定ファイル
 

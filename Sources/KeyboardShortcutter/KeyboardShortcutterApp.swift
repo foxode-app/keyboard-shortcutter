@@ -31,6 +31,8 @@ struct KeyboardShortcutterApp: App {
             }
             if model.errorMessage != nil { Text("設定画面にエラーがあります") }
             Divider()
+            Link(FoxodeWebsite.title, destination: FoxodeWebsite.productURL)
+            Divider()
             Button("Keyboard Shortcutterを終了") { NSApp.terminate(nil) }
                 .keyboardShortcut("q")
         } label: {
