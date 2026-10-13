@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>ja</string>
+    <key>CFBundleDisplayName</key>
+    <string>Keyboard Shortcutter</string>
+    <key>CFBundleExecutable</key>
+    <string>KeyboardShortcutter</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.foxode.keyboardshortcutter.app</string>
+    <key>CFBundleIconFile</key>
+    <string>KeyboardShortcutter</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Keyboard Shortcutter</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>登録したキー操作を検出し、入力ソースの切り替えやショートカットを実行するために入力監視を使用します。入力した文字列の記録・送信は行いません。</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 Foxode</string>
+</dict>
+</plist>

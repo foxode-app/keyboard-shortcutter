@@ -1,0 +1,23 @@
+.build/
+build/
+.swiftpm/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+.env
+.env.*
+!.env.example
+
+# Distribution output and signing material stay outside source control.
+.releases/
+*.app/
+*.dmg
+*.zip
+*.dSYM/
+*.p8
+*.p12
+*.pfx
+*.pem
+*.key
+*.cer
+*.certSigningRequest
