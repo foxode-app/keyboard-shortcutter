@@ -135,6 +135,33 @@ public enum ShortcutTrigger: Codable, Hashable, Sendable {
     }
 }
 
+public enum SystemAction: String, CaseIterable, Identifiable, Sendable {
+    case volumeDown, volumeUp, mute, playPause, nextTrack, previousTrack
+    case brightnessDown, brightnessUp
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .volumeDown: "音量を下げる"
+        case .volumeUp: "音量を上げる"
+        case .mute: "消音の切り替え"
+        case .playPause: "再生／一時停止"
+        case .nextTrack: "次の曲"
+        case .previousTrack: "前の曲"
+        case .brightnessDown: "画面を暗くする"
+        case .brightnessUp: "画面を明るくする"
+        }
+    }
+
+    public var repeatsWhileHeld: Bool {
+        switch self {
+        case .volumeDown, .volumeUp, .brightnessDown, .brightnessUp: true
+        case .mute, .playPause, .nextTrack, .previousTrack: false
+        }
+    }
+}
+
 public struct ShortcutAction: Codable, Equatable, Sendable {
     // A string discriminator preserves unknown future actions when loading/saving.
     public var kind: String
@@ -142,19 +169,27 @@ public struct ShortcutAction: Codable, Equatable, Sendable {
     public var applicationPath: String?
     public var url: String?
     public var shortcut: KeyCombination?
+    // Keep the raw value so newer system actions survive an older app's save.
+    public var systemAction: String?
+
+    public var resolvedSystemAction: SystemAction? {
+        systemAction.flatMap(SystemAction.init(rawValue:))
+    }
 
     public init(
         kind: String,
         inputSourceID: String? = nil,
         applicationPath: String? = nil,
         url: String? = nil,
-        shortcut: KeyCombination? = nil
+        shortcut: KeyCombination? = nil,
+        systemAction: String? = nil
     ) {
         self.kind = kind
         self.inputSourceID = inputSourceID
         self.applicationPath = applicationPath
         self.url = url
         self.shortcut = shortcut
+        self.systemAction = systemAction
     }
 
     public var title: String {
@@ -163,6 +198,7 @@ public struct ShortcutAction: Codable, Equatable, Sendable {
         case "launchApplication": "Launch application"
         case "openURL": "Open URL"
         case "sendShortcut": "Send keyboard shortcut"
+        case "systemAction": "System control"
         default: "Unavailable action (\(kind))"
         }
     }
@@ -212,6 +248,18 @@ public struct RulesConfiguration: Codable, Equatable, Sendable {
         disableOptionModifiers =
             try container.decodeIfPresent(Bool.self, forKey: .disableOptionModifiers)
             ?? false
+    }
+}
+
+public enum FunctionKey {
+    /// Physical macOS virtual key codes in F1 through F20 order.
+    public static let keyCodes: [UInt16] = [
+        122, 120, 99, 118, 96, 97, 98, 100, 101, 109,
+        103, 111, 105, 107, 113, 106, 64, 79, 80, 90,
+    ]
+
+    public static func contains(_ keyCode: UInt16) -> Bool {
+        keyCodes.contains(keyCode)
     }
 }
 

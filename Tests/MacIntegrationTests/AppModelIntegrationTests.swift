@@ -241,4 +241,101 @@ final class AppModelIntegrationTests: XCTestCase {
         XCTAssertEqual(model.rules, originalRules)
         XCTAssertNotNil(model.errorMessage)
     }
+
+    @MainActor
+    func testFunctionMappingsSwitchRequiredMonitoringModeAcrossEditsAndReload() async throws {
+        let url = try configurationURL()
+        try ConfigurationStore(url: url).save(RulesConfiguration(rules: [exampleRule()]))
+        let model = AppModel(configurationURL: url)
+        model.loadConfiguration()
+        XCTAssertFalse(model.hasFunctionKeyMappings)
+        XCTAssertFalse(model.requiresAccessibilityForMonitoring)
+
+        var functionRule = exampleRule()
+        functionRule.trigger = .keyboardShortcut(KeyCombination(keyCode: 101, modifiers: .command))
+        XCTAssertTrue(model.saveRule(functionRule))
+        XCTAssertTrue(model.hasFunctionKeyMappings)
+        XCTAssertTrue(model.requiresAccessibilityForMonitoring)
+        XCTAssertFalse(
+            model.isMonitoring, "Editing a model that has not started must not install an event tap")
+        XCTAssertFalse(model.isFunctionKeySuppressionActive)
+
+        let reloaded = AppModel(configurationURL: url)
+        reloaded.loadConfiguration()
+        XCTAssertTrue(reloaded.hasFunctionKeyMappings)
+        reloaded.toggleRule(functionRule)
+        XCTAssertFalse(reloaded.hasFunctionKeyMappings)
+        XCTAssertFalse(reloaded.requiresAccessibilityForMonitoring)
+        reloaded.toggleRule(try XCTUnwrap(reloaded.rules.first { $0.id == functionRule.id }))
+        XCTAssertTrue(reloaded.hasFunctionKeyMappings)
+        functionRule.trigger = .keyboardShortcut(KeyCombination(keyCode: 40, modifiers: .command))
+        XCTAssertTrue(reloaded.saveRule(functionRule))
+        XCTAssertFalse(reloaded.hasFunctionKeyMappings)
+        XCTAssertFalse(reloaded.requiresAccessibilityForMonitoring)
+    }
+
+    @MainActor
+    func testOptionAndFunctionModesStayIndependentWhenMappingsAreDeleted() async throws {
+        let url = try configurationURL()
+        try ConfigurationStore(url: url).save(RulesConfiguration(rules: [], disableOptionModifiers: true))
+        let model = AppModel(configurationURL: url)
+        model.loadConfiguration()
+        var functionRule = exampleRule()
+        functionRule.trigger = .keyboardShortcut(KeyCombination(keyCode: 109))
+        XCTAssertTrue(model.saveRule(functionRule))
+        model.deleteRule(functionRule)
+        XCTAssertFalse(model.hasFunctionKeyMappings)
+        XCTAssertTrue(model.disableOptionModifiers)
+        XCTAssertTrue(model.requiresAccessibilityForMonitoring)
+        model.setOptionModifierSuppression(false)
+        XCTAssertFalse(model.requiresAccessibilityForMonitoring)
+        model.isRecording = true
+        XCTAssertFalse(model.isMonitoring)
+        XCTAssertFalse(model.isFunctionKeySuppressionActive)
+        XCTAssertFalse(model.isOptionSuppressionActive)
+        model.isRecording = false
+        XCTAssertFalse(model.isMonitoring)
+    }
+
+    @MainActor
+    func testBatchFunctionMappingsPersistTogetherWithoutReplacingOtherRules() async throws {
+        let url = try configurationURL()
+        let original = exampleRule()
+        try ConfigurationStore(url: url).save(
+            RulesConfiguration(rules: [original], disableOptionModifiers: true))
+        let model = AppModel(configurationURL: url)
+        model.loadConfiguration()
+        let pair = [UInt16(101), 109].map { code in
+            ShortcutRule(
+                name: "Function \(code)", trigger: .keyboardShortcut(KeyCombination(keyCode: code)),
+                action: original.action)
+        }
+        XCTAssertTrue(model.saveRules(pair))
+        let saved = try XCTUnwrap(ConfigurationStore(url: url).load())
+        XCTAssertEqual(saved.rules, [original] + pair)
+        XCTAssertTrue(saved.disableOptionModifiers)
+        XCTAssertTrue(model.hasFunctionKeyMappings)
+        XCTAssertFalse(model.isMonitoring)
+    }
+
+    @MainActor
+    func testFailedBatchSavePreservesRulesAndMonitoringMode() async throws {
+        let url = try configurationURL()
+        let original = exampleRule()
+        try ConfigurationStore(url: url).save(RulesConfiguration(rules: [original]))
+        let model = AppModel(configurationURL: url)
+        model.loadConfiguration()
+        try FileManager.default.removeItem(at: url)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        let pair = [UInt16(101), 109].map { code in
+            ShortcutRule(
+                name: "Function \(code)", trigger: .keyboardShortcut(KeyCombination(keyCode: code)),
+                action: original.action)
+        }
+        XCTAssertFalse(model.saveRules(pair))
+        XCTAssertEqual(model.rules, [original])
+        XCTAssertFalse(model.hasFunctionKeyMappings)
+        XCTAssertFalse(model.requiresAccessibilityForMonitoring)
+        XCTAssertFalse(model.isMonitoring)
+    }
 }

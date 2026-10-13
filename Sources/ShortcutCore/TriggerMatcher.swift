@@ -32,6 +32,7 @@ public struct TriggerMatcher: Sendable {
     private var pressedKeys: Set<UInt16> = []
     private var pressedModifiers: Set<UInt16> = []
     private var tapCandidates: Set<UInt16> = []
+    private var repeatablePresses: [UInt16: ShortcutRule] = [:]
 
     public init() {}
 
@@ -39,6 +40,7 @@ public struct TriggerMatcher: Sendable {
         pressedKeys.removeAll(keepingCapacity: true)
         pressedModifiers.removeAll(keepingCapacity: true)
         tapCandidates.removeAll(keepingCapacity: true)
+        repeatablePresses.removeAll(keepingCapacity: true)
     }
 
     public mutating func process(_ event: KeyboardEvent, rules: [ShortcutRule]) -> [ShortcutRule] {
@@ -50,14 +52,34 @@ public struct TriggerMatcher: Sendable {
         case .keyDown:
             tapCandidates.removeAll(keepingCapacity: true)
             let isNewPress = pressedKeys.insert(event.keyCode).inserted
-            guard isNewPress, !event.isRepeat else { return [] }
             let combination = KeyCombination(keyCode: event.keyCode, modifiers: event.modifiers)
             guard combination.isValid else { return [] }
-            return matching(.keyboardShortcut(combination), rules: rules)
+            let trigger = ShortcutTrigger.keyboardShortcut(combination)
+            if event.isRepeat {
+                // Never start an action from a key held before monitoring began. A repeat must
+                // still target the same unambiguous action captured on its initial press.
+                guard !isNewPress, let initial = repeatablePresses[event.keyCode],
+                    initial.trigger == trigger
+                else { return [] }
+                let matches = matching(trigger, rules: rules)
+                guard let current = matches.first, current.id == initial.id,
+                    current.action == initial.action
+                else { return [] }
+                return matches
+            }
+            guard isNewPress else { return [] }
+            let matches = matching(trigger, rules: rules)
+            if let rule = matches.first, rule.action.kind == "systemAction",
+                rule.action.resolvedSystemAction?.repeatsWhileHeld == true
+            {
+                repeatablePresses[event.keyCode] = rule
+            }
+            return matches
         case .keyUp:
             // A key held before monitoring began must still invalidate an active tap.
             tapCandidates.removeAll(keepingCapacity: true)
             pressedKeys.remove(event.keyCode)
+            repeatablePresses.removeValue(forKey: event.keyCode)
         case .modifierDown:
             guard let modifier = PhysicalModifier(keyCode: event.keyCode) else {
                 tapCandidates.removeAll(keepingCapacity: true)

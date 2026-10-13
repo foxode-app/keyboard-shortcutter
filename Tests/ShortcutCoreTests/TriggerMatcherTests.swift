@@ -266,4 +266,81 @@ final class TriggerMatcherTests: XCTestCase {
             KeyboardEvent(kind: .modifierDown, keyCode: 58, modifiers: .option), rules: [rule])
         XCTAssertEqual(matcher.process(KeyboardEvent(kind: .modifierUp, keyCode: 58), rules: [rule]), [rule])
     }
+
+    private func systemRule(_ action: SystemAction, modifiers: KeyModifiers = []) -> ShortcutRule {
+        ShortcutRule(
+            name: action.title,
+            trigger: .keyboardShortcut(KeyCombination(keyCode: 101, modifiers: modifiers)),
+            action: ShortcutAction(kind: "systemAction", systemAction: action.rawValue))
+    }
+
+    func testOnlyContinuousSystemControlsRepeatFromAnObservedPress() {
+        for action in SystemAction.allCases {
+            let rule = systemRule(action)
+            var matcher = TriggerMatcher()
+            let press = KeyboardEvent(kind: .keyDown, keyCode: 101)
+            let repeated = KeyboardEvent(kind: .keyDown, keyCode: 101, isRepeat: true)
+            XCTAssertEqual(matcher.process(press, rules: [rule]), [rule])
+            XCTAssertTrue(matcher.process(press, rules: [rule]).isEmpty, "Duplicate nonrepeat")
+            XCTAssertEqual(
+                matcher.process(repeated, rules: [rule]), action.repeatsWhileHeld ? [rule] : [])
+            _ = matcher.process(KeyboardEvent(kind: .keyUp, keyCode: 101), rules: [rule])
+            XCTAssertTrue(matcher.process(repeated, rules: [rule]).isEmpty)
+        }
+    }
+
+    func testContinuousControlCannotStartFromAnUnobservedHeldKeyOrAfterReset() {
+        let rule = systemRule(.volumeDown)
+        let repeated = KeyboardEvent(kind: .keyDown, keyCode: 101, isRepeat: true)
+        var matcher = TriggerMatcher()
+        XCTAssertTrue(matcher.process(repeated, rules: [rule]).isEmpty)
+        XCTAssertTrue(matcher.process(repeated, rules: [rule]).isEmpty)
+        _ = matcher.process(KeyboardEvent(kind: .keyUp, keyCode: 101), rules: [rule])
+        XCTAssertEqual(matcher.process(KeyboardEvent(kind: .keyDown, keyCode: 101), rules: [rule]), [rule])
+        _ = matcher.process(KeyboardEvent(kind: .reset), rules: [rule])
+        XCTAssertTrue(matcher.process(repeated, rules: [rule]).isEmpty)
+    }
+
+    func testContinuousControlRepeatRequiresSameUnambiguousUneditedEnabledRule() {
+        let initial = systemRule(.volumeDown)
+        var disabled = initial
+        disabled.isEnabled = false
+        var changed = initial
+        changed.action.systemAction = SystemAction.volumeUp.rawValue
+        let replacement = systemRule(.volumeDown)
+        for laterRules in [[disabled], [changed], [replacement], [initial, replacement], []] {
+            var matcher = TriggerMatcher()
+            XCTAssertEqual(
+                matcher.process(KeyboardEvent(kind: .keyDown, keyCode: 101), rules: [initial]), [initial])
+            XCTAssertTrue(
+                matcher.process(
+                    KeyboardEvent(kind: .keyDown, keyCode: 101, isRepeat: true), rules: laterRules
+                ).isEmpty)
+        }
+        var matcher = TriggerMatcher()
+        XCTAssertTrue(
+            matcher.process(KeyboardEvent(kind: .keyDown, keyCode: 101), rules: [initial, replacement])
+                .isEmpty)
+        XCTAssertTrue(
+            matcher.process(KeyboardEvent(kind: .keyDown, keyCode: 101, isRepeat: true), rules: [initial])
+                .isEmpty)
+    }
+
+    func testFunctionModifierRemainsPartOfFunctionKeyTriggerDuringPressAndRepeat() {
+        let plain = systemRule(.volumeDown)
+        let function = systemRule(.brightnessDown, modifiers: .function)
+        var matcher = TriggerMatcher()
+        XCTAssertEqual(
+            matcher.process(
+                KeyboardEvent(kind: .keyDown, keyCode: 101, modifiers: .function), rules: [plain, function]),
+            [function])
+        XCTAssertTrue(
+            matcher.process(
+                KeyboardEvent(kind: .keyDown, keyCode: 101, isRepeat: true), rules: [plain, function]
+            ).isEmpty)
+        XCTAssertEqual(
+            matcher.process(
+                KeyboardEvent(kind: .keyDown, keyCode: 101, modifiers: .function, isRepeat: true),
+                rules: [plain, function]), [function])
+    }
 }

@@ -41,6 +41,10 @@ public enum RuleActionValidator {
             guard let shortcut = action.shortcut, shortcut.isValid else {
                 return "Choose a valid key and optional modifiers to send."
             }
+        case "systemAction":
+            guard action.resolvedSystemAction != nil else {
+                return "Choose an available volume, playback, or brightness control."
+            }
         default:
             return "This action type is unavailable in this version: \(action.kind)."
         }

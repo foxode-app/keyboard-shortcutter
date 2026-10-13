@@ -12,7 +12,7 @@ let shortcutterSyntheticEventTag: Int64 = 0x4B534354
 
 @MainActor
 final class EventMonitor {
-    private let onEvent: (KeyboardEvent) -> Void
+    private let onEvent: (KeyboardEvent) -> Bool
     private let onStatusChange: (String) -> Void
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -24,17 +24,20 @@ final class EventMonitor {
     private var recoveryTimes: [TimeInterval] = []
     private var stateSnapshotPending = false
     private var disableOptionModifiers = false
+    private var interceptFunctionKeys = false
     private let optionFilter = OptionEventFilter()
+    private var functionKeyFilter = FunctionKeyEventFilter()
     private(set) var isRunning = false
 
     static var monitoringPermissionGranted: Bool { CGPreflightListenEventAccess() }
     static var interceptionPermissionGranted: Bool { AXIsProcessTrusted() }
     var isSuppressingOption: Bool { isRunning && disableOptionModifiers }
+    var isSuppressingFunctionKeys: Bool { isRunning && interceptFunctionKeys }
 
     @discardableResult
     static func requestMonitoringPermission() -> Bool { CGRequestListenEventAccess() }
 
-    init(onEvent: @escaping (KeyboardEvent) -> Void, onStatusChange: @escaping (String) -> Void) {
+    init(onEvent: @escaping (KeyboardEvent) -> Bool, onStatusChange: @escaping (String) -> Void) {
         self.onEvent = onEvent
         self.onStatusChange = onStatusChange
         let center = NSWorkspace.shared.notificationCenter
@@ -52,7 +55,9 @@ final class EventMonitor {
                 center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                     MainActor.assumeIsolated {
                         guard let self, self.shouldRun else { return }
-                        _ = self.start(disableOptionModifiers: self.disableOptionModifiers)
+                        _ = self.start(
+                            disableOptionModifiers: self.disableOptionModifiers,
+                            interceptFunctionKeys: self.interceptFunctionKeys)
                     }
                 })
         }
@@ -65,15 +70,20 @@ final class EventMonitor {
     }
 
     @discardableResult
-    func start(disableOptionModifiers: Bool = false) -> Bool {
+    func start(disableOptionModifiers: Bool = false, interceptFunctionKeys: Bool = false) -> Bool {
         shouldRun = true
-        if isRunning && self.disableOptionModifiers == disableOptionModifiers { return true }
+        if isRunning && self.disableOptionModifiers == disableOptionModifiers
+            && self.interceptFunctionKeys == interceptFunctionKeys
+        {
+            return true
+        }
         tearDownTap()
         self.disableOptionModifiers = disableOptionModifiers
+        self.interceptFunctionKeys = interceptFunctionKeys
         guard permissionGranted else {
             onStatusChange(
-                disableOptionModifiers
-                    ? "Disabling the normal Option function requires Accessibility permission. Enable Keyboard Shortcutter in System Settings, then retry or relaunch."
+                requiresInterception
+                    ? "F-key remapping and Option suppression require Accessibility permission. Enable Keyboard Shortcutter in System Settings, then retry or relaunch."
                     : "Input Monitoring permission is required. Enable Keyboard Shortcutter in System Settings, then retry or relaunch."
             )
             return false
@@ -92,7 +102,7 @@ final class EventMonitor {
         guard
             let newTap = CGEvent.tapCreate(
                 tap: .cgSessionEventTap, place: .headInsertEventTap,
-                options: disableOptionModifiers ? .defaultTap : .listenOnly,
+                options: requiresInterception ? .defaultTap : .listenOnly,
                 eventsOfInterest: mask,
                 callback: { _, type, event, context in
                     guard let context else { return Unmanaged.passUnretained(event) }
@@ -110,8 +120,8 @@ final class EventMonitor {
             )
         else {
             onStatusChange(
-                disableOptionModifiers
-                    ? "macOS could not start Option suppression. Check Accessibility permission, close secure password entry, then retry."
+                requiresInterception
+                    ? "macOS could not start key remapping. Check Accessibility permission, close secure password entry, then retry."
                     : "macOS could not start the passive event monitor. Check Input Monitoring permission, close secure password entry, then retry."
             )
             return false
@@ -129,10 +139,18 @@ final class EventMonitor {
         CGEvent.tapEnable(tap: newTap, enable: true)
         isRunning = CGEvent.tapIsEnabled(tap: newTap)
         if isRunning {
-            onStatusChange(
-                disableOptionModifiers
-                    ? "Monitoring is active; the normal function of both Option keys is disabled."
-                    : "Monitoring is active (passive; original keys are preserved).")
+            if interceptFunctionKeys {
+                onStatusChange(
+                    disableOptionModifiers
+                        ? "Monitoring is active; assigned F keys are remapped and both Option keys are disabled."
+                        : "Monitoring is active; assigned F keys are remapped. Unassigned keys retain their normal behavior."
+                )
+            } else {
+                onStatusChange(
+                    disableOptionModifiers
+                        ? "Monitoring is active; the normal function of both Option keys is disabled."
+                        : "Monitoring is active (passive; original keys are preserved).")
+            }
         } else {
             tearDownTap()
             onStatusChange("macOS did not enable the monitor. Check the required permission and retry.")
@@ -159,11 +177,12 @@ final class EventMonitor {
         resetState()
     }
 
-    private func resetState() {
+    private func resetState(resetFunctionKeys: Bool = true) {
         pressedModifiers.removeAll(keepingCapacity: true)
         pressedKeys.removeAll(keepingCapacity: true)
         functionIsDown = false
-        onEvent(KeyboardEvent(kind: .reset))
+        if resetFunctionKeys { functionKeyFilter.reset() }
+        _ = onEvent(KeyboardEvent(kind: .reset))
     }
 
     private func snapshotHeldKeys() {
@@ -201,12 +220,19 @@ final class EventMonitor {
             return event
         }
         if event.getIntegerValueField(.eventSourceUserData) == shortcutterSyntheticEventTag {
-            resetState()
+            // App-generated events bypass matching and filtering. Keep ownership of
+            // physical F-key presses so their later releases cannot leak downstream.
+            resetState(resetFunctionKeys: false)
             scheduleStateSnapshot()
             return event
         }
         // Even during a matcher reset, outgoing events must still have Option removed.
-        if !stateSnapshotPending { observePhysicalEvent(type: type, event: event) }
+        let matched = !stateSnapshotPending && observePhysicalEvent(type: type, event: event)
+        if functionKeyFilter.shouldConsume(
+            event, type: type, enabled: interceptFunctionKeys, matched: matched)
+        {
+            return nil
+        }
         do {
             return try optionFilter.apply(to: event, type: type, enabled: disableOptionModifiers)
         } catch {
@@ -222,7 +248,7 @@ final class EventMonitor {
         }
     }
 
-    private func observePhysicalEvent(type: CGEventType, event: CGEvent) {
+    private func observePhysicalEvent(type: CGEventType, event: CGEvent) -> Bool {
         if type == .flagsChanged && event.getIntegerValueField(.keyboardEventKeycode) == 63 {
             functionIsDown = event.flags.contains(.maskSecondaryFn)
         }
@@ -232,7 +258,7 @@ final class EventMonitor {
         case .keyDown, .keyUp:
             let code = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
             if type == .keyDown { pressedKeys.insert(code) } else { pressedKeys.remove(code) }
-            onEvent(
+            return onEvent(
                 KeyboardEvent(
                     kind: type == .keyDown ? .keyDown : .keyUp,
                     keyCode: code,
@@ -243,27 +269,28 @@ final class EventMonitor {
             let code = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
             guard let mask = Self.physicalModifierMasks[code] else {
                 // Caps Lock reports a toggle, not a reliable physical release.
-                onEvent(KeyboardEvent(kind: .mouseActivity, modifiers: modifiers))
-                return
+                _ = onEvent(KeyboardEvent(kind: .mouseActivity, modifiers: modifiers))
+                return false
             }
             let down = event.flags.rawValue & mask != 0
             let wasDown = pressedModifiers.contains(code)
-            guard down != wasDown else { return }
+            guard down != wasDown else { return false }
             if down { pressedModifiers.insert(code) } else { pressedModifiers.remove(code) }
-            onEvent(
+            _ = onEvent(
                 KeyboardEvent(kind: down ? .modifierDown : .modifierUp, keyCode: code, modifiers: modifiers))
             if down
                 && (!pressedKeys.isEmpty || pressedModifiers.count > 1
                     || Self.mouseButtons.contains { CGEventSource.buttonState(.hidSystemState, button: $0) })
             {
-                onEvent(KeyboardEvent(kind: .mouseActivity, modifiers: modifiers))
+                _ = onEvent(KeyboardEvent(kind: .mouseActivity, modifiers: modifiers))
             }
         default:
             // Ignore routine pointer movement when there cannot be a modifier-only candidate.
             if type != .mouseMoved || !pressedModifiers.isEmpty {
-                onEvent(KeyboardEvent(kind: .mouseActivity, modifiers: modifiers))
+                _ = onEvent(KeyboardEvent(kind: .mouseActivity, modifiers: modifiers))
             }
         }
+        return false
     }
 
     private func recover(disabledByUserInput: Bool) {
@@ -294,8 +321,10 @@ final class EventMonitor {
     }
 
     private var permissionGranted: Bool {
-        disableOptionModifiers ? Self.interceptionPermissionGranted : Self.monitoringPermissionGranted
+        requiresInterception ? Self.interceptionPermissionGranted : Self.monitoringPermissionGranted
     }
+
+    private var requiresInterception: Bool { disableOptionModifiers || interceptFunctionKeys }
 
     private static var optionIsHeld: Bool {
         CGEventSource.keyState(.hidSystemState, key: 58)

@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var isMonitoring = false
     @Published private(set) var disableOptionModifiers = false
     @Published private(set) var isOptionSuppressionActive = false
+    @Published private(set) var isFunctionKeySuppressionActive = false
     @Published private(set) var isPaused = UserDefaults.standard.bool(forKey: "monitoringPaused")
     @Published private(set) var hasMonitoringPermission = false
     @Published private(set) var hasAccessibilityPermission = false
@@ -40,11 +41,12 @@ final class AppModel: ObservableObject {
     private let inputSources = InputSourceService()
     private lazy var executor = ActionExecutor(inputSourceService: inputSources)
     private lazy var monitor: EventMonitor = EventMonitor(
-        onEvent: { [weak self] event in self?.receive(event) },
+        onEvent: { [weak self] event in self?.receive(event) ?? false },
         onStatusChange: { [weak self] message in
             self?.status = message
             self?.isMonitoring = self?.monitor.isRunning ?? false
             self?.isOptionSuppressionActive = self?.monitor.isSuppressingOption ?? false
+            self?.isFunctionKeySuppressionActive = self?.monitor.isSuppressingFunctionKeys ?? false
         }
     )
     private var matcher = TriggerMatcher()
@@ -66,12 +68,23 @@ final class AppModel: ObservableObject {
     }
 
     var conflicts: [RuleConflict] { TriggerMatcher.conflicts(in: rules) }
+    var hasFunctionKeyMappings: Bool {
+        rules.contains { rule in
+            guard rule.isEnabled, case .keyboardShortcut(let combination) = rule.trigger else {
+                return false
+            }
+            return FunctionKey.contains(combination.keyCode)
+        }
+    }
+    var requiresAccessibilityForMonitoring: Bool { disableOptionModifiers || hasFunctionKeyMappings }
     var hasRequiredMonitoringPermission: Bool {
-        disableOptionModifiers ? hasAccessibilityPermission : hasMonitoringPermission
+        requiresAccessibilityForMonitoring ? hasAccessibilityPermission : hasMonitoringPermission
     }
     var statusTitle: String {
         if isPaused { return "一時停止中" }
         if isRecording { return "キーを記録中" }
+        if isFunctionKeySuppressionActive && isOptionSuppressionActive { return "監視中・Fキー設定・Option無効化中" }
+        if isFunctionKeySuppressionActive { return "監視中・Fキー設定中" }
         if isOptionSuppressionActive { return "監視中・Option無効化中" }
         return isMonitoring ? "監視中" : "監視停止"
     }
@@ -94,6 +107,7 @@ final class AppModel: ObservableObject {
         resumeIfPossible()
         if isFirstLaunch || !hasRequiredMonitoringPermission || !configurationAvailable
             || (disableOptionModifiers && !isOptionSuppressionActive)
+            || (hasFunctionKeyMappings && !isFunctionKeySuppressionActive)
         {
             showSettings()
         }
@@ -151,11 +165,19 @@ final class AppModel: ObservableObject {
 
     @discardableResult
     func saveRule(_ rule: ShortcutRule) -> Bool {
+        saveRules([rule])
+    }
+
+    /// Saves related additions or edits together, preserving all unrelated mappings.
+    @discardableResult
+    func saveRules(_ changes: [ShortcutRule]) -> Bool {
         var updated = rules
-        if let index = updated.firstIndex(where: { $0.id == rule.id }) {
-            updated[index] = rule
-        } else {
-            updated.append(rule)
+        for rule in changes {
+            if let index = updated.firstIndex(where: { $0.id == rule.id }) {
+                updated[index] = rule
+            } else {
+                updated.append(rule)
+            }
         }
         return persist(updated)
     }
@@ -169,12 +191,8 @@ final class AppModel: ObservableObject {
     }
 
     func setOptionModifierSuppression(_ enabled: Bool) {
-        guard enabled != disableOptionModifiers,
-            persist(rules, disableOptionModifiers: enabled)
-        else { return }
-        monitor.stop()
-        refreshSystemState()
-        resumeIfPossible()
+        guard enabled != disableOptionModifiers else { return }
+        _ = persist(rules, disableOptionModifiers: enabled)
     }
 
     func validationMessage(for action: ShortcutAction) -> String? {
@@ -246,6 +264,7 @@ final class AppModel: ObservableObject {
             self.disableOptionModifiers = suppressOption
             errorMessage = nil
             invalidatePendingEvents()
+            resumeIfPossible()
             return true
         } catch {
             errorMessage = "設定を保存できません: \(error.localizedDescription)"
@@ -255,21 +274,25 @@ final class AppModel: ObservableObject {
 
     private func resumeIfPossible() {
         guard isStarted, configurationAvailable, !isPaused, !isRecording else { return }
-        guard disableOptionModifiers || EventMonitor.monitoringPermissionGranted else {
+        guard requiresAccessibilityForMonitoring || EventMonitor.monitoringPermissionGranted else {
             monitor.stop()
             isMonitoring = false
             status = "入力監視の権限を設定してください"
             return
         }
-        guard !disableOptionModifiers || EventMonitor.interceptionPermissionGranted else {
+        guard !requiresAccessibilityForMonitoring || EventMonitor.interceptionPermissionGranted else {
             monitor.stop()
             isMonitoring = false
-            status = "Option無効化にはアクセシビリティ権限が必要です。「権限と起動」で許可してください。"
+            status = "Fキーの割り当て・Option無効化にはアクセシビリティ権限が必要です。「権限と起動」で許可してください。"
             return
         }
-        if !monitor.isRunning || monitor.isSuppressingOption != disableOptionModifiers {
-            isMonitoring = monitor.start(disableOptionModifiers: disableOptionModifiers)
+        if !monitor.isRunning || monitor.isSuppressingOption != disableOptionModifiers
+            || monitor.isSuppressingFunctionKeys != hasFunctionKeyMappings
+        {
+            isMonitoring = monitor.start(
+                disableOptionModifiers: disableOptionModifiers, interceptFunctionKeys: hasFunctionKeyMappings)
             isOptionSuppressionActive = monitor.isSuppressingOption
+            isFunctionKeySuppressionActive = monitor.isSuppressingFunctionKeys
         }
     }
 
@@ -280,13 +303,13 @@ final class AppModel: ObservableObject {
         executor.observe(KeyboardEvent(kind: .reset))
     }
 
-    private func receive(_ event: KeyboardEvent) {
+    private func receive(_ event: KeyboardEvent) -> Bool {
         // Invalidate actions queued before a tap reset, sleep, or synthetic-event boundary.
         if event.kind == .reset { generation += 1 }
-        guard !isPaused, !isRecording, configurationAvailable else { return }
+        guard !isPaused, !isRecording, configurationAvailable else { return false }
         executor.observe(event)
         let matched = matcher.process(event, rules: rules)
-        guard !matched.isEmpty else { return }
+        guard !matched.isEmpty else { return false }
         let currentGeneration = generation
         // Defer all TIS / workspace / UI work until after the event-tap callback returns.
         DispatchQueue.main.async { [weak self] in
@@ -303,6 +326,7 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+        return event.kind == .keyDown && FunctionKey.contains(event.keyCode)
     }
 }
 

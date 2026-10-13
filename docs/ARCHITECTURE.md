@@ -10,9 +10,12 @@
 
 - `KeyboardShortcutterApp`: application lifecycle and SwiftUI menu-bar entry point.
 - `AppModel`: settings, permission status, monitoring lifecycle, and coordination.
-- `EventMonitor`: passive monitoring or optional active Option filtering, physical modifier identification, state recovery, and conversion to core `KeyboardEvent` values.
+- `EventMonitor`: passive monitoring or active F-key/Option filtering, physical modifier identification, state recovery, and conversion to core `KeyboardEvent` values.
 - `ActionExecutor`: dispatches matched actions to independent implementations. Synthetic events carry an app-specific marker to prevent feedback.
 - `InputSourceService`: runtime Text Input Source Services enumeration and selection. Unavailable sources return a visible error.
+- `SystemActionSender`: balanced, tagged volume/playback/brightness auxiliary-control events; injectable posting for tests.
+- `FunctionKeyEventFilter`: owns matched F-key down/repeat/up transitions while preserving unassigned and synthetic events.
+- `FunctionKeySettingsView`: F1–F20 assignments and a non-overwriting F9/F10 volume preset.
 - `SettingsView` and `ShortcutRecorder`: rule editing and local, focused shortcut capture.
 - `PreferencesMigration`: one-way migration of the pause preference from the former local bundle ID; never copies unrelated defaults or replaces a saved preference.
 
@@ -37,13 +40,15 @@ The tap performs event conversion and inexpensive in-memory matching; OS action 
 
 macOS also sets the function flag for arrow, navigation, and F keys. The adapter and recorder track physical Fn separately so a recorded combination agrees with the key picker. Startup and recovery take a single hardware-state snapshot to avoid treating an already-held key as a fresh tap.
 
-`TriggerMatcher` tracks pressed keys, pressed physical modifiers, and candidates for a modifier-only tap. Any competing key, modifier, or mouse activity invalidates the candidate. A clean release fires once; no duration threshold is imposed. Repeated keyDown events do not repeat actions. Modifier sets for shortcuts must match exactly. Multiple enabled rules with the same trigger are reported as conflicts and suppressed together.
+`TriggerMatcher` tracks pressed keys, pressed physical modifiers, and candidates for a modifier-only tap. Any competing key, modifier, or mouse activity invalidates the candidate. A clean release fires once; no duration threshold is imposed. Repeated keyDown events repeat only volume and brightness system actions, after an observed initial press and while the same unique rule/action remains enabled. All other actions fire once per press. Modifier sets for shortcuts must match exactly. Multiple enabled rules with the same trigger are reported as conflicts and suppressed together.
 
 Pause, recording, event-tap interruptions, and session changes reset transient state so an incomplete press cannot become a later tap. The adapter re-enables an OS-disabled tap when appropriate and reports failures. Synthetic shortcut sending waits for physical release, expires after five seconds, and marks emitted events so they cannot recursively match rules.
 
-## Optional Option filtering
+## F-key and Option filtering
 
-The default mode uses `CGEventTapOptions.listenOnly`, checks `CGPreflightListenEventAccess`, and requires Input Monitoring permission. It never consumes the original shortcut. When `disableOptionModifiers` is enabled, the monitor uses `defaultTap` and checks `AXIsProcessTrusted` for explicitly granted Accessibility permission. This active mode does not additionally gate on Input Monitoring. A failed permission check or event-tap creation reports monitoring failure; it must not silently fall back to passive mode while claiming Option suppression is active.
+The default mode uses `CGEventTapOptions.listenOnly`, checks `CGPreflightListenEventAccess`, and requires Input Monitoring permission. It never consumes the original shortcut. When an enabled F-key mapping exists or `disableOptionModifiers` is enabled, the monitor uses `defaultTap` and checks `AXIsProcessTrusted` for explicitly granted Accessibility permission. This active mode does not additionally gate on Input Monitoring. A failed permission check or event-tap creation reports monitoring failure; it must not silently fall back to passive mode while claiming Option suppression is active.
+
+For F1–F20, a uniquely matched enabled mapping consumes the original down, all repeats, and its matching release. Unassigned, disabled, conflicting, and differently modified F-key operations pass through. Consumed press ownership is retained across synthetic-event matcher resets. No per-device HID mappings or system function-key preferences are changed. Rule changes reevaluate the event-tap mode; disabling the final F mapping returns to passive mode unless Option suppression still requires an active tap.
 
 The matcher always receives the original physical event. After matching, the active filter consumes physical left/right Option `flagsChanged` events and removes the aggregate Option flag and both device-specific Option bits from forwarded keyboard, mouse, and scroll events. It preserves every other modifier. For Option-affected keyboard events, it reconstructs the event from the physical key code and cleaned flags without reading Unicode text; this avoids forwarding an already translated Option character payload after clearing only the flags. Thus Option + K reaches the foreground app as K while an Option-based trigger can still execute its configured action. Work in the callback is bounded state tracking, flag manipulation, and keyboard-event reconstruction; actions run later.
 
@@ -59,7 +64,7 @@ The production bundle ID is `com.foxode.keyboardshortcutter.app`. Before creatin
 
 `disableOptionModifiers` is an additive Boolean in schema version 1. New configurations default to `false`, and decoding a saved configuration without the field also yields `false`. Persist it through the same atomic write path as mappings; do not replace existing rules when saving this preference.
 
-Actions have a string discriminator so an unknown action kind can survive decoding and be shown as unavailable. The current schema retains the known action fields; adding new fields requires an explicit compatibility policy. Unknown trigger kinds fail decoding, preserving the file. Future migrations should explicitly transform old data, retain a backup when needed, and never silently reset user choices.
+Actions have a string discriminator so an unknown action kind can survive decoding and be shown as unavailable. The current schema retains the known action fields; `systemAction` is an additive optional raw string, decoded as absent for old settings and retained for unknown future system-action values. Adding other new fields requires an explicit compatibility policy. Unknown trigger kinds fail decoding, preserving the file. Future migrations should explicitly transform old data, retain a backup when needed, and never silently reset user choices.
 
 ## Add a trigger
 

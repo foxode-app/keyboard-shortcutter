@@ -39,6 +39,10 @@ struct SettingsView: View {
                 .padding(10).background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             }
             TabView {
+                FunctionKeySettingsView(
+                    model: model, onEdit: { editingRule = $0 },
+                    onDelete: { deletingRule = $0 }, actionSummary: actionSummary
+                ).tabItem { Label("Fキー", systemImage: "f.square") }
                 mappings.tabItem { Label("マッピング", systemImage: "keyboard") }
                 permissions.tabItem { Label("権限と起動", systemImage: "lock.shield") }
             }
@@ -107,7 +111,12 @@ struct SettingsView: View {
 
     private var monitoringExplanation: String {
         if !model.isMonitoring {
-            return "監視停止中：Optionは通常どおり動作します。入力内容は記録しません。"
+            return "監視停止中：登録した割り当ては実行しません。入力内容は記録しません。"
+        }
+        if model.isFunctionKeySuppressionActive {
+            return model.isOptionSuppressionActive
+                ? "Fキー割り当て・Option無効化が動作中です。入力内容は記録しません。"
+                : "Fキー割り当てが動作中です。割り当てのないキーは通常どおり動作します。入力内容は記録しません。"
         }
         if model.isOptionSuppressionActive {
             return "Option無効化中：他のアプリに届くキーやマウス操作からOptionの効果を除きます。入力内容は記録しません。"
@@ -197,18 +206,19 @@ struct SettingsView: View {
             return action.applicationPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "アプリ未設定"
         case "openURL": return action.url ?? "URL未設定"
         case "sendShortcut": return "送信: \(action.shortcut?.title ?? "未設定")"
+        case "systemAction": return action.resolvedSystemAction?.title ?? "システム操作未設定 / 未対応"
         default: return "未対応のアクション: \(action.kind)"
         }
     }
 
     private var permissions: some View {
         Form {
-            Section("入力監視（Option無効化がオフのとき）") {
+            Section("入力監視（通常のキー監視）") {
                 Label(
                     model.hasMonitoringPermission ? "許可済み" : "許可が必要です",
                     systemImage: model.hasMonitoringPermission ? "checkmark.circle" : "lock")
                 Text(
-                    "通常の受動監視で使用します。システム設定 → プライバシーとセキュリティ → 入力監視で許可してください。Option無効化をオンにする場合は、下のアクセシビリティ権限を使用します。許可後に再起動が必要な場合があります。"
+                    "Fキーへの割り当てとOption無効化を使わない通常の監視に必要です。システム設定 → プライバシーとセキュリティ → 入力監視で許可してください。Fキーへの割り当て、またはOption無効化を使うときの監視は、下のアクセシビリティ権限を使用します。許可後に再起動が必要な場合があります。"
                 )
                 .font(.callout)
                 HStack {
@@ -218,12 +228,12 @@ struct SettingsView: View {
                 }
                 Text(model.status).font(.caption).foregroundStyle(.secondary)
             }
-            Section("アクセシビリティ（Option無効化・ショートカット送信）") {
+            Section("アクセシビリティ") {
                 Label(
                     model.hasAccessibilityPermission ? "許可済み" : "未許可",
                     systemImage: model.hasAccessibilityPermission ? "checkmark.circle" : "lock")
                 Text(
-                    "Option本来の動作を無効化するには、入力イベントの遮断・変更が必要なため、この権限を使用します。ショートカット送信にも必要です。Option無効化をオフにした通常の監視は、入力監視の権限だけを使用します。"
+                    "割り当てたFキーの元の動作を置き換えるために必要です。Option本来の動作の無効化、音量などのシステム操作、ショートカット送信にも使用します。Fキーの割り当てとOption無効化がない通常の監視には、入力監視の権限を使用します。"
                 )
                 .font(.callout)
                 HStack {
@@ -272,6 +282,7 @@ private struct RuleEditor: View {
                 Section("トリガー") {
                     Picker("種類", selection: triggerKind) {
                         Text("修飾キーの単独タップ").tag("modifier")
+                        Text("Fキー").tag("functionKey")
                         Text("キーボードショートカット").tag("shortcut")
                     }
                     if case .modifierTap = draft.trigger {
@@ -283,7 +294,10 @@ private struct RuleEditor: View {
                         Text("他のキー、クリック、ドラッグ、スクロールと併用した場合は実行しません。Caps Lockは単独タップに対応していません。")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
-                        ChordPicker(combination: triggerCombination)
+                        ChordPicker(
+                            combination: triggerCombination,
+                            functionKeysOnly: triggerKind.wrappedValue == "functionKey"
+                        )
                         Button("トリガーのキーを記録…") { beginRecording(.trigger) }
                     }
                 }
@@ -293,8 +307,10 @@ private struct RuleEditor: View {
                         Text("アプリケーションを開く").tag("launchApplication")
                         Text("URLを開く").tag("openURL")
                         Text("ショートカットを送信").tag("sendShortcut")
-                        if !["inputSource", "launchApplication", "openURL", "sendShortcut"].contains(
-                            draft.action.kind)
+                        Text("音量・再生・明るさ").tag("systemAction")
+                        if !["inputSource", "launchApplication", "openURL", "sendShortcut", "systemAction"]
+                            .contains(
+                                draft.action.kind)
                         {
                             Text("未対応: \(draft.action.kind)").tag(draft.action.kind)
                         }
@@ -351,6 +367,9 @@ private struct RuleEditor: View {
             if kind == "sendShortcut", draft.action.shortcut == nil {
                 draft.action.shortcut = KeyCombination(keyCode: 0, modifiers: [.command])
             }
+            if kind == "systemAction", draft.action.systemAction == nil {
+                draft.action.systemAction = SystemAction.volumeDown.rawValue
+            }
         }
         .onDisappear { endRecording() }
     }
@@ -390,6 +409,28 @@ private struct RuleEditor: View {
             Button("送信するキーを記録…") { beginRecording(.action) }
             Text("アクセシビリティ権限が必要です。操作中の物理キーを離してから送信します（待機は最大5秒）。送信先はその時点の最前面アプリです。")
                 .font(.caption).foregroundStyle(.secondary)
+        case "systemAction":
+            Picker(
+                "操作",
+                selection: Binding(
+                    get: { draft.action.systemAction ?? "" },
+                    set: { draft.action.systemAction = $0 }
+                )
+            ) {
+                Text("操作を選択").tag("")
+                ForEach(SystemAction.allCases) { action in
+                    Text(action.title).tag(action.rawValue)
+                }
+                if let raw = draft.action.systemAction, !raw.isEmpty,
+                    SystemAction(rawValue: raw) == nil
+                {
+                    Text("未対応: \(raw)").tag(raw)
+                }
+            }
+            Text("アクセシビリティ権限が必要です。音量と明るさは、Fキーを長押しすると繰り返し調整できます。再生操作は対応するメディアアプリに届きます。")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("音量や明るさをmacOSから調整できない外部スピーカー・ディスプレイでは、その機能は動作しません。")
+                .font(.caption).foregroundStyle(.secondary)
         default:
             Text("このアクションは未対応です。対応する種類を選択してください。")
         }
@@ -404,14 +445,22 @@ private struct RuleEditor: View {
         Binding(
             get: {
                 if case .modifierTap = draft.trigger { return "modifier" }
+                if case .keyboardShortcut(let combination) = draft.trigger,
+                    FunctionKey.contains(combination.keyCode)
+                {
+                    return "functionKey"
+                }
                 return "shortcut"
             },
             set: { value in
                 endRecording()
-                draft.trigger =
-                    value == "modifier"
-                    ? .modifierTap(.leftOption)
-                    : .keyboardShortcut(KeyCombination(keyCode: 40, modifiers: [.control, .option]))
+                switch value {
+                case "modifier": draft.trigger = .modifierTap(.leftOption)
+                case "functionKey": draft.trigger = .keyboardShortcut(KeyCombination(keyCode: 122))
+                default:
+                    draft.trigger = .keyboardShortcut(
+                        KeyCombination(keyCode: 40, modifiers: [.control, .option]))
+                }
             })
     }
 
@@ -460,6 +509,7 @@ private struct RuleEditor: View {
 
 private struct ChordPicker: View {
     @Binding var combination: KeyCombination
+    var functionKeysOnly = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -471,7 +521,8 @@ private struct ChordPicker: View {
                 modifier("Fn", .function)
             }
             Picker("キー", selection: $combination.keyCode) {
-                ForEach(KeyNames.availableKeys, id: \.self) { code in
+                ForEach(functionKeysOnly ? FunctionKey.keyCodes : KeyNames.availableKeys, id: \.self) {
+                    code in
                     Text(KeyNames.name(for: code)).tag(code)
                 }
             }

@@ -20,7 +20,7 @@ final class ActionExecutor {
         return AXIsProcessTrustedWithOptions(options as CFDictionary)
     }
 
-    init(inputSourceService: InputSourceService) {
+    init(inputSourceService: InputSourceService, systemActionSender: SystemActionSender? = nil) {
         let sender = SendShortcutActionHandler()
         shortcutHandler = sender
         handlers = [
@@ -28,6 +28,7 @@ final class ActionExecutor {
             "launchApplication": LaunchApplicationActionHandler(),
             "openURL": OpenURLActionHandler(),
             "sendShortcut": sender,
+            "systemAction": SystemActionHandler(sender: systemActionSender ?? SystemActionSender()),
         ]
     }
 
@@ -73,6 +74,24 @@ private struct ActionFailure: LocalizedError {
 @MainActor
 private protocol ActionHandler {
     func execute(_ action: ShortcutAction, completion: @escaping (Result<Void, Error>) -> Void)
+}
+
+@MainActor
+private final class SystemActionHandler: ActionHandler {
+    private let sender: SystemActionSender
+
+    init(sender: SystemActionSender) { self.sender = sender }
+
+    func execute(_ action: ShortcutAction, completion: @escaping (Result<Void, Error>) -> Void) {
+        guard let systemAction = action.resolvedSystemAction else {
+            completion(.failure(ActionFailure("Choose an available system control in Settings.")))
+            return
+        }
+        do {
+            try sender.send(systemAction)
+            completion(.success(()))
+        } catch { completion(.failure(error)) }
+    }
 }
 
 @MainActor
