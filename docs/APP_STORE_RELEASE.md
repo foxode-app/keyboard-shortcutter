@@ -19,7 +19,7 @@ Mac App Store では App Sandbox が必須です。[Apple の Sandbox 設定手�
 | 左右の修飾キー単独押し・ショートカットの監視 | `EventMonitor.swift` の `.listenOnly` | 入力監視の許可を使うイベント監視は Sandbox 内でも対応可能。実際の署名済みビルドで検証する。 |
 | Option 本来の動作を無効化 | `.defaultTap` と `OptionEventFilter.swift` によるイベント書換え・抑止 | アクセシビリティ権限に依存。現行方式の Sandbox・審査適合性を確認し、対応できなければ App Store 版から除外する。 |
 | 前面アプリへのショートカット送信 | `ActionExecutor.swift` の `CGEvent.post` | アクセシビリティ権限に依存。実行できることと審査に適合することを分けて確認する。 |
-| ABC・ひらがな等への切替 | `InputSourceService.swift` の `TISSelectInputSource` | Sandbox 内で、他アプリの入力欄にフォーカスしたまま切替できるか検証する。 |
+| ABC・ひらがな等への切替 | `InputSourceService.swift` の `TISSelectInputSource`。ひらがなは `ActionExecutor.swift` から「かな」キーも送信 | ひらがなへの切替はアクセシビリティ権限に依存。Sandbox 内でのキー送信と、他アプリの入力欄にフォーカスしたままの切替を検証する。 |
 | アプリ起動 | `NSOpenPanel` で選択したパスを保存 | 標準の Applications 以外の場所も含め、アプリ再起動後にアクセスできるか検証する。必要なら security-scoped bookmark を導入する。 |
 | URL を開く・ログイン時起動・設定保存 | `NSWorkspace`・`SMAppService`・Application Support | Sandbox 内で動作確認する。設定保存先のコンテナ化と既存設定の移行方針を確認する。 |
 

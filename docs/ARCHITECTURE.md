@@ -12,7 +12,7 @@
 - `AppModel`: settings, permission status, monitoring lifecycle, and coordination.
 - `EventMonitor`: passive monitoring or active F-key/Option filtering, physical modifier identification, state recovery, and conversion to core `KeyboardEvent` values.
 - `ActionExecutor`: dispatches matched actions to independent implementations. Synthetic events carry an app-specific marker to prevent feedback.
-- `InputSourceService`: runtime Text Input Source Services enumeration and selection. Unavailable sources return a visible error.
+- `InputSourceService`: runtime Text Input Source Services enumeration, input-mode metadata, and selection. Unavailable sources return a visible error. `InputSourceSelecting` allows tests to replace OS selection without changing the user's input source.
 - `SystemActionSender`: balanced, tagged volume/playback/brightness auxiliary-control events; injectable posting for tests.
 - `FunctionKeyEventFilter`: owns matched F-key down/repeat/up transitions while preserving unassigned and synthetic events.
 - `FunctionKeySettingsView`: F1–F20 assignments and a non-overwriting F9/F10 volume preset.
@@ -43,6 +43,8 @@ macOS also sets the function flag for arrow, navigation, and F keys. The adapter
 `TriggerMatcher` tracks pressed keys, pressed physical modifiers, and candidates for a modifier-only tap. Any competing key, modifier, or mouse activity invalidates the candidate. A clean release fires once; no duration threshold is imposed. Repeated keyDown events repeat only volume and brightness system actions, after an observed initial press and while the same unique rule/action remains enabled. All other actions fire once per press. Modifier sets for shortcuts must match exactly. Multiple enabled rules with the same trigger are reported as conflicts and suppressed together.
 
 Pause, recording, event-tap interruptions, and session changes reset transient state so an incomplete press cannot become a later tap. The adapter re-enables an OS-disabled tap when appropriate and reports failures. Synthetic shortcut sending waits for physical release, expires after five seconds, and marks emitted events so they cannot recursively match rules.
+
+Hiragana input-source actions use that same release/focus/cancellation pipeline. Once ready, they select the configured TIS source and post one balanced JIS Kana (104) press, even if the source was already selected. TIS selection alone can leave the focused client's IME stale while the menu reports Japanese; see [the Karabiner maintainer's report](https://github.com/pqrs-org/Karabiner-Elements/discussions/4095). Detection uses the source's `kTISPropertyInputModeID` (`com.apple.inputmethod.Japanese` or `com.apple.inputmethod.Japanese.Hiragana`), not a localized label or a fixed provider's source ID. Other modes retain TIS-only selection. Accessibility permission, unchanged focus, and physical release are checked before selection; failed selection never posts Kana. A subsequent input-source action cancels pending Kana delivery so an older request cannot override it. Unit tests inject source selection, hardware state, foreground PID, and event posting; they never alter the real input source or send global keys.
 
 ## F-key and Option filtering
 

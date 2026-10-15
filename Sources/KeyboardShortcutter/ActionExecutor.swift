@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon
 import CoreGraphics
 
 #if canImport(ShortcutCore)
@@ -20,11 +21,15 @@ final class ActionExecutor {
         return AXIsProcessTrustedWithOptions(options as CFDictionary)
     }
 
-    init(inputSourceService: InputSourceService, systemActionSender: SystemActionSender? = nil) {
-        let sender = SendShortcutActionHandler()
-        shortcutHandler = sender
+    init(
+        inputSourceService: any InputSourceSelecting,
+        systemActionSender: SystemActionSender? = nil,
+        shortcutHandler: SendShortcutActionHandler? = nil
+    ) {
+        let sender = shortcutHandler ?? SendShortcutActionHandler()
+        self.shortcutHandler = sender
         handlers = [
-            "inputSource": InputSourceActionHandler(service: inputSourceService),
+            "inputSource": InputSourceActionHandler(service: inputSourceService, sender: sender),
             "launchApplication": LaunchApplicationActionHandler(),
             "openURL": OpenURLActionHandler(),
             "sendShortcut": sender,
@@ -96,13 +101,35 @@ private final class SystemActionHandler: ActionHandler {
 
 @MainActor
 private final class InputSourceActionHandler: ActionHandler {
-    let service: InputSourceService
-    init(service: InputSourceService) { self.service = service }
+    let service: any InputSourceSelecting
+    let sender: SendShortcutActionHandler
+
+    init(service: any InputSourceSelecting, sender: SendShortcutActionHandler) {
+        self.service = service
+        self.sender = sender
+    }
 
     func execute(_ action: ShortcutAction, completion: @escaping (Result<Void, Error>) -> Void) {
         guard let id = action.inputSourceID, !id.isEmpty else {
             completion(
                 .failure(ActionFailure("Choose an installed input source for this mapping in Settings.")))
+            return
+        }
+        // A later source request must cancel a Kana key waiting for physical release.
+        sender.cancelPendingAction()
+        guard let source = service.enumerate().first(where: { $0.id == id }) else {
+            completion(.failure(InputSourceService.Failure.missingSource(id)))
+            return
+        }
+        if source.requiresKanaKey {
+            // TIS can update the menu without activating the focused app's IME.
+            // Always send Kana, even when TIS already reports this source selected.
+            // Select only after release/focus/permission checks, immediately before
+            // posting, so an interrupted request cannot partially change the source.
+            sender.send(
+                KeyCombination(keyCode: UInt16(kVK_JIS_Kana)),
+                beforePosting: { [service] in try service.select(id: id) },
+                completion: completion)
             return
         }
         do {
@@ -161,11 +188,12 @@ private final class OpenURLActionHandler: ActionHandler {
 }
 
 @MainActor
-private final class SendShortcutActionHandler: ActionHandler {
+final class SendShortcutActionHandler: ActionHandler {
     private struct Pending {
         let id: UUID
         let combination: KeyCombination
         let targetPID: pid_t?
+        let beforePosting: () throws -> Void
         let completion: (Result<Void, Error>) -> Void
     }
 
@@ -173,17 +201,62 @@ private final class SendShortcutActionHandler: ActionHandler {
     private var pending: Pending?
     private var deadline: DispatchWorkItem?
     private var deliveryScheduled = false
+    private let permissionGranted: @MainActor () -> Bool
+    private let physicalModifiers: @MainActor () -> KeyModifiers
+    private let heldKeyCodes: @MainActor () -> Set<UInt16>
+    private let frontmostPID: @MainActor () -> pid_t?
+    private let postEvent: @MainActor (CGEvent) -> Void
+
+    init(
+        permissionGranted: @escaping @MainActor () -> Bool = {
+            ActionExecutor.accessibilityPermissionGranted
+        },
+        physicalModifiers: @escaping @MainActor () -> KeyModifiers = {
+            EventMonitor.modifiers(
+                from: CGEventSource.flagsState(.hidSystemState),
+                physicalFunctionDown: CGEventSource.keyState(.hidSystemState, key: 63))
+        },
+        heldKeyCodes: @escaping @MainActor () -> Set<UInt16> = {
+            Set(
+                (UInt16(0)...127).filter { code in
+                    PhysicalModifier(keyCode: code) == nil && code != 57 && code != 63
+                        && CGEventSource.keyState(.hidSystemState, key: code)
+                })
+        },
+        frontmostPID: @escaping @MainActor () -> pid_t? = {
+            NSWorkspace.shared.frontmostApplication?.processIdentifier
+        },
+        postEvent: @escaping @MainActor (CGEvent) -> Void = { $0.post(tap: .cgSessionEventTap) }
+    ) {
+        self.permissionGranted = permissionGranted
+        self.physicalModifiers = physicalModifiers
+        self.heldKeyCodes = heldKeyCodes
+        self.frontmostPID = frontmostPID
+        self.postEvent = postEvent
+    }
 
     func execute(_ action: ShortcutAction, completion: @escaping (Result<Void, Error>) -> Void) {
-        guard ActionExecutor.accessibilityPermissionGranted else {
+        guard let combination = action.shortcut else {
+            completion(.failure(ActionFailure("Configure a shortcut to send.")))
+            return
+        }
+        send(combination, completion: completion)
+    }
+
+    func send(
+        _ combination: KeyCombination,
+        beforePosting: @escaping () throws -> Void = {},
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
+        guard permissionGranted() else {
             completion(
                 .failure(
                     ActionFailure(
-                        "Sending a shortcut requires Accessibility permission. Grant it explicitly in Settings, then retry."
+                        "ひらがなへの切り替え・ショートカット送信にはアクセシビリティ権限が必要です。「権限と起動」で許可してから再試行してください。"
                     )))
             return
         }
-        guard let combination = action.shortcut, combination.isValid,
+        guard combination.isValid,
             PhysicalModifier(keyCode: combination.keyCode) == nil,
             ![UInt16(57), UInt16(63)].contains(combination.keyCode),
             combination.modifiers.subtracting([.shift, .control, .option, .command, .function]).isEmpty
@@ -196,7 +269,7 @@ private final class SendShortcutActionHandler: ActionHandler {
         let id = UUID()
         pending = Pending(
             id: id, combination: combination,
-            targetPID: NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            targetPID: frontmostPID(), beforePosting: beforePosting,
             completion: completion)
         let timeout = DispatchWorkItem { [weak self] in
             guard let self, self.pending?.id == id else { return }
@@ -243,11 +316,7 @@ private final class SendShortcutActionHandler: ActionHandler {
     }
 
     private var physicalKeysAreReleased: Bool {
-        downKeys.isEmpty
-            && EventMonitor.modifiers(
-                from: CGEventSource.flagsState(.hidSystemState),
-                physicalFunctionDown: CGEventSource.keyState(.hidSystemState, key: 63)
-            ).isEmpty
+        downKeys.isEmpty && physicalModifiers().isEmpty
     }
 
     private func scheduleDeliveryIfReleased() {
@@ -259,15 +328,12 @@ private final class SendShortcutActionHandler: ActionHandler {
             guard let pending = self.pending, self.physicalKeysAreReleased else { return }
             // Snapshot once per delivery attempt, outside the event callback. A key held before
             // monitoring started may never have produced a keyDown in our observed stream.
-            let alreadyHeld = (UInt16(0)...127).filter { code in
-                PhysicalModifier(keyCode: code) == nil && code != 57 && code != 63
-                    && CGEventSource.keyState(.hidSystemState, key: code)
-            }
+            let alreadyHeld = self.heldKeyCodes()
             guard alreadyHeld.isEmpty else {
                 self.downKeys.formUnion(alreadyHeld)
                 return  // A real keyUp event will retry; there is no polling.
             }
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pending.targetPID else {
+            guard self.frontmostPID() == pending.targetPID else {
                 self.finish(
                     .failure(
                         ActionFailure("The shortcut was canceled because the frontmost application changed."))
@@ -275,7 +341,7 @@ private final class SendShortcutActionHandler: ActionHandler {
                 return
             }
             do {
-                try self.post(pending.combination)
+                try self.post(pending.combination, beforePosting: pending.beforePosting)
                 self.finish(.success(()))
             } catch { self.finish(.failure(error)) }
         }
@@ -290,8 +356,8 @@ private final class SendShortcutActionHandler: ActionHandler {
         if let completion { DispatchQueue.main.async { completion(result) } }
     }
 
-    private func post(_ combination: KeyCombination) throws {
-        guard ActionExecutor.accessibilityPermissionGranted,
+    private func post(_ combination: KeyCombination, beforePosting: () throws -> Void) throws {
+        guard permissionGranted(),
             let source = CGEventSource(stateID: .privateState)
         else {
             throw ActionFailure(
@@ -326,6 +392,7 @@ private final class SendShortcutActionHandler: ActionHandler {
             flags.remove(flag)
             events.append(try makeEvent(key: code, down: false, modifier: true))
         }
-        for event in events { event.post(tap: .cgSessionEventTap) }
+        try beforePosting()
+        for event in events { postEvent(event) }
     }
 }

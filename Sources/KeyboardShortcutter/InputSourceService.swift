@@ -2,11 +2,23 @@ import Carbon
 import Foundation
 
 @MainActor
-final class InputSourceService {
+protocol InputSourceSelecting {
+    func enumerate() -> [InputSourceService.Source]
+    func select(id: String) throws
+}
+
+@MainActor
+final class InputSourceService: InputSourceSelecting {
     struct Source: Identifiable, Hashable {
         let id: String
         let name: String
         let languages: [String]
+        var inputModeID: String? = nil
+
+        var requiresKanaKey: Bool {
+            inputModeID == "com.apple.inputmethod.Japanese"
+                || inputModeID == "com.apple.inputmethod.Japanese.Hiragana"
+        }
     }
 
     enum Failure: LocalizedError {
@@ -31,7 +43,8 @@ final class InputSourceService {
                 let name: String = property(source, kTISPropertyLocalizedName)
             else { return nil }
             let languages: [String] = property(source, kTISPropertyInputSourceLanguages) ?? []
-            return Source(id: id, name: name, languages: languages)
+            let inputModeID: String? = property(source, kTISPropertyInputModeID)
+            return Source(id: id, name: name, languages: languages, inputModeID: inputModeID)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 

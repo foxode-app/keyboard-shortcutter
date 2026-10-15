@@ -235,7 +235,7 @@ struct SettingsView: View {
                     model.hasAccessibilityPermission ? "許可済み" : "未許可",
                     systemImage: model.hasAccessibilityPermission ? "checkmark.circle" : "lock")
                 Text(
-                    "割り当てたFキーの元の動作を置き換えるために必要です。Option本来の動作の無効化、音量などのシステム操作、ショートカット送信にも使用します。Fキーの割り当てとOption無効化がない通常の監視には、入力監視の権限を使用します。"
+                    "割り当てたFキーの元の動作を置き換えるために必要です。ひらがなへの切り替え、Option本来の動作の無効化、音量などのシステム操作、ショートカット送信にも使用します。Fキーの割り当てとOption無効化がない通常の監視には、入力監視の権限を使用します。"
                 )
                 .font(.callout)
                 HStack {
@@ -393,6 +393,10 @@ private struct RuleEditor: View {
                 }
             }
             Button("入力ソースを再読み込み") { model.refreshSystemState() }
+            if model.sources.first(where: { $0.id == draft.action.inputSourceID })?.requiresKanaKey == true {
+                Text("ひらがなへの切り替えにはアクセシビリティ権限が必要です。「権限と起動」で許可してください。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Text("表示されない場合は、システム設定 → キーボード → 入力ソースで追加してください。初期候補はこのMacのソースから選びます。")
                 .font(.caption).foregroundStyle(.secondary)
         case "launchApplication":
