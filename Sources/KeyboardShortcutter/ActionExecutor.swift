@@ -363,6 +363,13 @@ final class SendShortcutActionHandler: ActionHandler {
             throw ActionFailure(
                 "macOS denied permission to send the shortcut. Check Accessibility permission.")
         }
+        if combination.keyCode == UInt16(kVK_JIS_Kana) {
+            // Kana only exists on JIS keyboards. The default ANSI source translates it
+            // to U+0010 (a navigation control character). Set the keyboard type before
+            // allocating either event so AppKit receives a native Kana event instead.
+            // 42 is gestaltThirdPartyJISKbd from the SDK's Gestalt.h.
+            source.keyboardType = 42
+        }
         let definitions: [(KeyModifiers, CGKeyCode, CGEventFlags)] = [
             (.control, 59, .maskControl), (.option, 58, .maskAlternate),
             (.shift, 56, .maskShift), (.command, 55, .maskCommand),

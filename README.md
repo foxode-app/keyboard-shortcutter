@@ -4,7 +4,7 @@ Apple Silicon Mac 向けの、Swift / SwiftUI 製メニューバーアプリで�
 
 ## ダウンロード
 
-[GitHub Releases の v1.1.2](https://github.com/foxode-app/keyboard-shortcutter/releases/tag/v1.1.2) から `Keyboard-Shortcutter-1.1.2-arm64.dmg` をダウンロードし、アプリを Applications にドラッグしてください。1.1.2は、右Optionでメニューバーが「あ」になっても実際の入力が英字のままになる問題を修正したプレビュー版です。ひらがなへの切り替えには「アクセシビリティ」の許可が必要です。対応環境・権限・既知の制限は、この README と [Foxode の製品ページ](https://foxode.com/products/keyboard-shortcutter/) に記載しています。
+[GitHub Releases の v1.1.3](https://github.com/foxode-app/keyboard-shortcutter/releases/tag/v1.1.3) から `Keyboard-Shortcutter-1.1.3-arm64.dmg` をダウンロードし、アプリを Applications にドラッグしてください。1.1.3は、Codexのチャット欄で右Optionを押すと入力履歴が表示される問題を修正したプレビュー版です。1.1.2の日本語入力切り替えの改善も含みます。ひらがなへの切り替えには「アクセシビリティ」の許可が必要です。対応環境・権限・既知の制限は、この README と [Foxode の製品ページ](https://foxode.com/products/keyboard-shortcutter/) に記載しています。
 
 Releases の DMG がインストール用ファイルです。GitHub が自動生成する「Source code」は、下記の手順でビルドするためのソースコードです。
 
@@ -141,6 +141,15 @@ Swift は 4 スペース、型は UpperCamelCase、メソッド・変数は lowe
 アプリは Apple のシステムフレームワークを使用し、第三者のソースコード・ライブラリ・フォントを同梱していません。アプリアイコンは `scripts/create-icon.swift` の図形描画から生成しています。API キー、署名証明書、秘密鍵、個人の設定、ビルド出力はコミットしないでください。
 
 設計と拡張手順は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、実機確認は [docs/MANUAL_TESTS.md](docs/MANUAL_TESTS.md) を参照してください。ユニットテストだけでは、権限付きのグローバル入力動作を検証できません。
+
+## 1.1.3の検証結果（2026-10-16）
+
+Codexのチャット欄で右Optionを押すと入力履歴が表示されるという報告を受け、送信する「かな」キーのキーボード種別をJISに修正しました。既定のANSI種別ではAppKitに渡る文字が制御コード `U+0010` になっていました。イベント生成前にJIS種別を指定し、実際の「かな」キーと同じ入力モードイベントを送ります。
+
+- 回帰テストは修正前の押下・解放イベントで失敗し、修正後に成功。`make test` は125件、`make lint` とDeveloper ID署名付き `make app` も成功しました。
+- macOS 27.0.1の隔離したAppKit入力欄とChrome 155で、修正後も `aiu` が「あいう」になり、余分な文字が入らないことを確認しました。
+- macOS 27.0.1 / Apple Siliconで、利用者がCodexのチャット欄で実際に右Optionを操作し、症状の解消を確認しました。既存のマッピングとOption抑止設定も保持しています。
+- macOS 13の実機、ほかの日本語IME、すべてのキーボード配列・入力先アプリでの動作は未検証です。
 
 ## 1.1.2の検証結果（2026-10-15）
 

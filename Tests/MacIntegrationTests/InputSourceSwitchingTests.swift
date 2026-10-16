@@ -1,3 +1,5 @@
+import AppKit
+import Carbon
 import CoreGraphics
 import ShortcutCore
 import XCTest
@@ -5,6 +7,23 @@ import XCTest
 @testable import KeyboardShortcutter
 
 final class InputSourceSwitchingTests: XCTestCase {
+    @MainActor
+    func testHiraganaUsesJISKeyboardEventsWithoutNavigationControlCharacters() async throws {
+        let harness = Harness()
+        try await harness.select(Harness.hiraganaID).get()
+
+        XCTAssertEqual(harness.posted.count, 2)
+        for event in harness.posted {
+            XCTAssertEqual(event.getIntegerValueField(.keyboardEventKeyboardType), 42)
+            // Check AppKit's translation, not just Quartz's Unicode payload: AppKit can
+            // regenerate the ANSI control character even when that payload is cleared.
+            let nativeEvent = try XCTUnwrap(NSEvent(cgEvent: event))
+            XCTAssertEqual(nativeEvent.keyCode, UInt16(kVK_JIS_Kana))
+            XCTAssertEqual(nativeEvent.characters, " ")
+            XCTAssertEqual(nativeEvent.charactersIgnoringModifiers, " ")
+        }
+    }
+
     @MainActor
     func testHiraganaActivatesTheInputClientEvenWhenAlreadySelected() async throws {
         let harness = Harness()
