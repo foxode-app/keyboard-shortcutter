@@ -115,27 +115,16 @@ private final class InputSourceActionHandler: ActionHandler {
                 .failure(ActionFailure("Choose an installed input source for this mapping in Settings.")))
             return
         }
-        // A later source request must cancel a Kana key waiting for physical release.
+        // A later source request replaces any action waiting for physical release.
         sender.cancelPendingAction()
-        guard let source = service.enumerate().first(where: { $0.id == id }) else {
+        guard service.enumerate().contains(where: { $0.id == id }) else {
             completion(.failure(InputSourceService.Failure.missingSource(id)))
             return
         }
-        if source.requiresKanaKey {
-            // TIS can update the menu without activating the focused app's IME.
-            // Always send Kana, even when TIS already reports this source selected.
-            // Select only after release/focus/permission checks, immediately before
-            // posting, so an interrupted request cannot partially change the source.
-            sender.send(
-                KeyCombination(keyCode: UInt16(kVK_JIS_Kana)),
-                beforePosting: { [service] in try service.select(id: id) },
-                completion: completion)
-            return
-        }
-        do {
-            try service.select(id: id)
-            completion(.success(()))
-        } catch { completion(.failure(error)) }
+        // Additional Kana or mode-switch key events can become text, editor commands,
+        // or an unhandled-key alert. Select the source without sending keyboard input.
+        sender.runAfterRelease(
+            { [service] in try service.select(id: id) }, completion: completion)
     }
 }
 
@@ -191,9 +180,8 @@ private final class OpenURLActionHandler: ActionHandler {
 final class SendShortcutActionHandler: ActionHandler {
     private struct Pending {
         let id: UUID
-        let combination: KeyCombination
         let targetPID: pid_t?
-        let beforePosting: () throws -> Void
+        let operation: () throws -> Void
         let completion: (Result<Void, Error>) -> Void
     }
 
@@ -245,14 +233,13 @@ final class SendShortcutActionHandler: ActionHandler {
 
     func send(
         _ combination: KeyCombination,
-        beforePosting: @escaping () throws -> Void = {},
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         guard permissionGranted() else {
             completion(
                 .failure(
                     ActionFailure(
-                        "ひらがなへの切り替え・ショートカット送信にはアクセシビリティ権限が必要です。「権限と起動」で許可してから再試行してください。"
+                        "ショートカット送信にはアクセシビリティ権限が必要です。「権限と起動」で許可してから再試行してください。"
                     )))
             return
         }
@@ -265,11 +252,23 @@ final class SendShortcutActionHandler: ActionHandler {
                 .failure(ActionFailure("Configure a valid key and modifiers for the shortcut to send.")))
             return
         }
+        runAfterRelease(
+            { [weak self] in
+                guard let self else {
+                    throw ActionFailure("The shortcut was canceled because its sender was released.")
+                }
+                try self.post(combination)
+            }, completion: completion)
+    }
+
+    func runAfterRelease(
+        _ operation: @escaping () throws -> Void,
+        completion: @escaping (Result<Void, Error>) -> Void
+    ) {
         cancelPendingAction()
         let id = UUID()
         pending = Pending(
-            id: id, combination: combination,
-            targetPID: frontmostPID(), beforePosting: beforePosting,
+            id: id, targetPID: frontmostPID(), operation: operation,
             completion: completion)
         let timeout = DispatchWorkItem { [weak self] in
             guard let self, self.pending?.id == id else { return }
@@ -341,7 +340,7 @@ final class SendShortcutActionHandler: ActionHandler {
                 return
             }
             do {
-                try self.post(pending.combination, beforePosting: pending.beforePosting)
+                try pending.operation()
                 self.finish(.success(()))
             } catch { self.finish(.failure(error)) }
         }
@@ -356,7 +355,7 @@ final class SendShortcutActionHandler: ActionHandler {
         if let completion { DispatchQueue.main.async { completion(result) } }
     }
 
-    private func post(_ combination: KeyCombination, beforePosting: () throws -> Void) throws {
+    private func post(_ combination: KeyCombination) throws {
         guard permissionGranted(),
             let source = CGEventSource(stateID: .privateState)
         else {
@@ -364,10 +363,7 @@ final class SendShortcutActionHandler: ActionHandler {
                 "macOS denied permission to send the shortcut. Check Accessibility permission.")
         }
         if combination.keyCode == UInt16(kVK_JIS_Kana) {
-            // Kana only exists on JIS keyboards. The default ANSI source translates it
-            // to U+0010 (a navigation control character). Set the keyboard type before
-            // allocating either event so AppKit receives a native Kana event instead.
-            // 42 is gestaltThirdPartyJISKbd from the SDK's Gestalt.h.
+            // Explicitly configured Kana shortcuts only; input-source actions never post keys.
             source.keyboardType = 42
         }
         let definitions: [(KeyModifiers, CGKeyCode, CGEventFlags)] = [
@@ -399,7 +395,6 @@ final class SendShortcutActionHandler: ActionHandler {
             flags.remove(flag)
             events.append(try makeEvent(key: code, down: false, modifier: true))
         }
-        try beforePosting()
         for event in events { postEvent(event) }
     }
 }

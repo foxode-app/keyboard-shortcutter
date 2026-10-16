@@ -15,10 +15,6 @@ final class InputSourceService: InputSourceSelecting {
         let languages: [String]
         var inputModeID: String? = nil
 
-        var requiresKanaKey: Bool {
-            inputModeID == "com.apple.inputmethod.Japanese"
-                || inputModeID == "com.apple.inputmethod.Japanese.Hiragana"
-        }
     }
 
     enum Failure: LocalizedError {

@@ -4,7 +4,7 @@
 
 ## 直接配布版との違い
 
-正式な Bundle ID は `com.foxode.keyboardshortcutter.app`、バージョンは 1.0.0（ビルド 1）です。アプリのアイコンとユーティリティのカテゴリを設定済みです。`make app` は既定ではローカル用アドホック署名、`SIGNING_IDENTITY` を指定すると Developer ID の Hardened Runtime・タイムスタンプ付き署名を行います。
+正式な Bundle ID は `com.foxode.keyboardshortcutter.app` です。現在の直接配布用ビルドは1.1.5（ビルド7）で、ローカル適用後の確認を終えています。GitHub Releases向けの配布物も1.1.5です。アプリのアイコンとユーティリティのカテゴリを設定済みです。`make app` は既定ではローカル用アドホック署名、`SIGNING_IDENTITY` を指定すると Developer ID の Hardened Runtime・タイムスタンプ付き署名を行います。
 
 自分で配布する場合は、自身の Apple Developer Program アカウントと署名環境を用意してください。Developer ID による直接配布と、App Store の署名・Sandbox 対応・審査は別の手順です。証明書や秘密鍵はソースコードに保存しません。
 
@@ -19,7 +19,7 @@ Mac App Store では App Sandbox が必須です。[Apple の Sandbox 設定手�
 | 左右の修飾キー単独押し・ショートカットの監視 | `EventMonitor.swift` の `.listenOnly` | 入力監視の許可を使うイベント監視は Sandbox 内でも対応可能。実際の署名済みビルドで検証する。 |
 | Option 本来の動作を無効化 | `.defaultTap` と `OptionEventFilter.swift` によるイベント書換え・抑止 | アクセシビリティ権限に依存。現行方式の Sandbox・審査適合性を確認し、対応できなければ App Store 版から除外する。 |
 | 前面アプリへのショートカット送信 | `ActionExecutor.swift` の `CGEvent.post` | アクセシビリティ権限に依存。実行できることと審査に適合することを分けて確認する。 |
-| ABC・ひらがな等への切替 | `InputSourceService.swift` の `TISSelectInputSource`。ひらがなは `ActionExecutor.swift` から「かな」キーも送信 | ひらがなへの切替はアクセシビリティ権限に依存。Sandbox 内でのキー送信と、他アプリの入力欄にフォーカスしたままの切替を検証する。 |
+| ABC・ひらがな等への切替 | 1.1.5は全入力モードで `InputSourceService.swift` の `TISSelectInputSource` のみ。擬似キー送信なし | 入力ソース選択自体にアクセシビリティは不要。Sandbox 内で、他アプリの入力欄にフォーカスしたまま実入力まで切り替わるか検証する。一部CJK入力欄への反映遅延は既知の制限。 |
 | アプリ起動 | `NSOpenPanel` で選択したパスを保存 | 標準の Applications 以外の場所も含め、アプリ再起動後にアクセスできるか検証する。必要なら security-scoped bookmark を導入する。 |
 | URL を開く・ログイン時起動・設定保存 | `NSWorkspace`・`SMAppService`・Application Support | Sandbox 内で動作確認する。設定保存先のコンテナ化と既存設定の移行方針を確認する。 |
 
@@ -48,7 +48,7 @@ Apple は [Sandbox と互換性のない機能](https://developer.apple.com/docu
 | プラットフォーム | macOS |
 | 主言語 | 日本語 |
 | カテゴリ | ユーティリティ |
-| バージョン | 1.0.0、初回ビルド番号 1 |
+| バージョン | App Store向けの検証・提出時に確定する。現在の直接配布用ビルドは1.1.5（ビルド7）。 |
 | 対応環境 | 現在は macOS 13 以降、Apple Silicon のみ。Intel 対応とは表記しない。 |
 | SKU | `keyboard-shortcutter-macos` を候補とし、アカウント内の重複を確認する。 |
 | Bundle ID | `com.foxode.keyboardshortcutter.app`。App Store Connect 登録時に利用可否を確認する。 |
@@ -58,9 +58,12 @@ Apple は [Sandbox と互換性のない機能](https://developer.apple.com/docu
 
 ## 検証状況
 
+- 2026年10月16日、1.1.5（ビルド7）で入力ソース操作の擬似キー送信を除去。自動テスト128件（純粋ロジック51件、macOS統合77件）、lint、Developer ID署名付きビルドが成功した。
+- `/Applications` への適用後、監視中と設定ファイルのハッシュ一致を確認。macOS 27.0.1 / Apple SiliconのCodexで、利用者が右Alt→`aiu` により警告音・余分な空白なしで「あいう」へ変換されることを確認した。これは非Sandbox版の当該入力欄での確認であり、Sandbox適合や審査承認を示さない。1.1.5はDeveloper ID署名・Apple公証・Gatekeeper検証済みのDMGとしてGitHub Releasesで配布する。
+- 未公開の1.1.4は右Optionで警告音が鳴るとの報告を受けて採用を中止した。
 - 2026年10月13日に `make test` を再実行し、83 件成功。
 - `make xcode` でローカル用アドホック署名の Release ビルドが成功。
 - 直接配布準備として Bundle ID・アイコン・任意の Developer ID 署名経路を追加。Sandbox は無効のまま。テスト成功は Sandbox 適合や審査承認を示すものではない。
-- 入力権限付きの実操作、Sandbox 内での入力ソース切替、macOS 13 実機での動作は未検証。[実機テスト](MANUAL_TESTS.md) を参照する。
+- Sandbox 内での入力ソース切替、macOS 13 実機、他の入力先・IME・キーボード配列を含む全条件は未検証。[実機テスト](MANUAL_TESTS.md) を参照する。
 
 `PrivacyInfo.xcprivacy` は現時点で存在しません。ただし [Required Reason API の現行説明](https://developer.apple.com/documentation/bundleresources/describing-use-of-required-reason-api) の対象 OS に macOS は含まれていないため、純粋 macOS アプリについて未作成だけを申請不可の理由にはしません。公開プライバシーポリシーと App Store Connect のプライバシー申告は別途必要です。
