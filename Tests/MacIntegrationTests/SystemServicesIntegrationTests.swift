@@ -14,6 +14,15 @@ final class SystemServicesIntegrationTests: XCTestCase {
     }
 
     @MainActor
+    func testInputModesAreNeverReportedAsASCIILayouts() async {
+        let service = InputSourceService()
+        let modes = service.enumerate().filter { $0.inputModeID != nil }
+        XCTAssertTrue(modes.allSatisfy { !$0.isASCIICapableLayout })
+        // Reading the selected source must not change it; it may be absent without a login session.
+        if let current = service.currentSourceID() { XCTAssertFalse(current.isEmpty) }
+    }
+
+    @MainActor
     func testSelectingDefinitelyMissingSourceFailsWithoutSelectingAnything() async {
         let service = InputSourceService()
         let missingID = "KeyboardShortcutterTests.missing.\(UUID().uuidString)"

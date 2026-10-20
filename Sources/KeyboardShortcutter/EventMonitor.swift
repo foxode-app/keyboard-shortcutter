@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Carbon
 import CoreGraphics
+import os
 
 #if canImport(ShortcutCore)
 import ShortcutCore
@@ -14,6 +15,12 @@ let shortcutterSyntheticEventTag: Int64 = 0x4B534354
 final class EventMonitor {
     private let onEvent: (KeyboardEvent) -> Bool
     private let onStatusChange: (String) -> Void
+    private let uptime: @MainActor () -> TimeInterval
+    private let hardwareKeysAreReleased: @MainActor () -> Bool
+    private let currentEventTimestamp: @MainActor () -> CGEventTimestamp?
+    private let secureInputEnabled: @MainActor () -> Bool
+    private let mouseButtonIsDown: @MainActor () -> Bool
+    private let logger = Logger(subsystem: "com.foxode.keyboardshortcutter.app", category: "EventMonitor")
     private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var pressedModifiers = Set<UInt16>()
@@ -27,6 +34,10 @@ final class EventMonitor {
     private var interceptFunctionKeys = false
     private let optionFilter = OptionEventFilter()
     private var functionKeyFilter = FunctionKeyEventFilter()
+    private var staleStateTimer: Timer?
+    private var lastKeyboardEventTime: TimeInterval?
+    private var repairedThroughTimestamp: CGEventTimestamp?
+    private var staleFunctionKeyPresses = Set<UInt16>()
     private(set) var isRunning = false
 
     static var monitoringPermissionGranted: Bool { CGPreflightListenEventAccess() }
@@ -37,9 +48,25 @@ final class EventMonitor {
     @discardableResult
     static func requestMonitoringPermission() -> Bool { CGRequestListenEventAccess() }
 
-    init(onEvent: @escaping (KeyboardEvent) -> Bool, onStatusChange: @escaping (String) -> Void) {
+    init(
+        onEvent: @escaping (KeyboardEvent) -> Bool, onStatusChange: @escaping (String) -> Void,
+        uptime: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        hardwareKeysAreReleased: @escaping @MainActor () -> Bool = { EventMonitor.physicalKeysAreReleased },
+        currentEventTimestamp: @escaping @MainActor () -> CGEventTimestamp? = {
+            CGEvent(source: nil)?.timestamp
+        },
+        secureInputEnabled: @escaping @MainActor () -> Bool = { IsSecureEventInputEnabled() },
+        mouseButtonIsDown: @escaping @MainActor () -> Bool = {
+            EventMonitor.mouseButtons.contains { CGEventSource.buttonState(.hidSystemState, button: $0) }
+        }
+    ) {
         self.onEvent = onEvent
         self.onStatusChange = onStatusChange
+        self.uptime = uptime
+        self.hardwareKeysAreReleased = hardwareKeysAreReleased
+        self.currentEventTimestamp = currentEventTimestamp
+        self.secureInputEnabled = secureInputEnabled
+        self.mouseButtonIsDown = mouseButtonIsDown
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
             observers.append(
@@ -64,6 +91,7 @@ final class EventMonitor {
     }
 
     deinit {
+        staleStateTimer?.invalidate()
         for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
         if let runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes) }
         if let tap { CFMachPortInvalidate(tap) }
@@ -139,6 +167,8 @@ final class EventMonitor {
         CGEvent.tapEnable(tap: newTap, enable: true)
         isRunning = CGEvent.tapIsEnabled(tap: newTap)
         if isRunning {
+            startStaleStateTimer()
+            logger.info("Event monitoring started.")
             if interceptFunctionKeys {
                 onStatusChange(
                     disableOptionModifiers
@@ -166,6 +196,11 @@ final class EventMonitor {
     }
 
     private func tearDownTap() {
+        staleStateTimer?.invalidate()
+        staleStateTimer = nil
+        lastKeyboardEventTime = nil
+        repairedThroughTimestamp = nil
+        staleFunctionKeyPresses.removeAll(keepingCapacity: true)
         if let source = runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
         }
@@ -181,7 +216,10 @@ final class EventMonitor {
         pressedModifiers.removeAll(keepingCapacity: true)
         pressedKeys.removeAll(keepingCapacity: true)
         functionIsDown = false
-        if resetFunctionKeys { functionKeyFilter.reset() }
+        if resetFunctionKeys {
+            functionKeyFilter.reset()
+            staleFunctionKeyPresses.removeAll(keepingCapacity: true)
+        }
         _ = onEvent(KeyboardEvent(kind: .reset))
     }
 
@@ -209,7 +247,36 @@ final class EventMonitor {
         }
     }
 
-    private func receive(type: CGEventType, event: CGEvent) -> CGEvent? {
+    private func startStaleStateTimer() {
+        staleStateTimer?.invalidate()
+        lastKeyboardEventTime = uptime()
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isRunning, self.shouldRun else { return }
+                self.repairStaleHeldState()
+            }
+        }
+        timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        staleStateTimer = timer
+    }
+
+    /// Reconciles a missed release without interpreting the release as a shortcut.
+    /// The timer calls this only while monitoring; injected state also permits offline regression tests.
+    func repairStaleHeldState() {
+        guard let lastKeyboardEventTime, uptime() - lastKeyboardEventTime >= 0.5,
+            !pressedKeys.isEmpty || !pressedModifiers.isEmpty || functionIsDown,
+            !secureInputEnabled(), let timestamp = currentEventTimestamp(), hardwareKeysAreReleased()
+        else { return }
+        // A stalled main loop may still have old events queued. Ignore those events for
+        // matching, but continue filtering them and owning any previously consumed F-key release.
+        repairedThroughTimestamp = timestamp
+        staleFunctionKeyPresses.formUnion(pressedKeys.filter(FunctionKey.contains))
+        resetState(resetFunctionKeys: false)
+        logger.notice("Recovered held keyboard state after an idle input gap.")
+    }
+
+    func receive(type: CGEventType, event: CGEvent) -> CGEvent? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             resetState()
             isRunning = false
@@ -219,6 +286,8 @@ final class EventMonitor {
             }
             return event
         }
+        let isKeyboardEvent = type == .keyDown || type == .keyUp || type == .flagsChanged
+        if isKeyboardEvent { lastKeyboardEventTime = uptime() }
         if event.getIntegerValueField(.eventSourceUserData) == shortcutterSyntheticEventTag {
             // App-generated events bypass matching and filtering. Keep ownership of
             // physical F-key presses so their later releases cannot leak downstream.
@@ -226,8 +295,18 @@ final class EventMonitor {
             scheduleStateSnapshot()
             return event
         }
+        let isBeforeRepair = isKeyboardEvent && repairedThroughTimestamp.map { event.timestamp <= $0 } == true
+        if !isBeforeRepair, type == .keyDown,
+            event.getIntegerValueField(.keyboardEventAutorepeat) == 0
+        {
+            let code = UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode))
+            if staleFunctionKeyPresses.remove(code) != nil {
+                functionKeyFilter.releaseOwnership(of: code)
+            }
+        }
         // Even during a matcher reset, outgoing events must still have Option removed.
-        let matched = !stateSnapshotPending && observePhysicalEvent(type: type, event: event)
+        let matched =
+            !stateSnapshotPending && !isBeforeRepair && observePhysicalEvent(type: type, event: event)
         if functionKeyFilter.shouldConsume(
             event, type: type, enabled: interceptFunctionKeys, matched: matched)
         {
@@ -280,7 +359,7 @@ final class EventMonitor {
                 KeyboardEvent(kind: down ? .modifierDown : .modifierUp, keyCode: code, modifiers: modifiers))
             if down
                 && (!pressedKeys.isEmpty || pressedModifiers.count > 1
-                    || Self.mouseButtons.contains { CGEventSource.buttonState(.hidSystemState, button: $0) })
+                    || mouseButtonIsDown())
             {
                 _ = onEvent(KeyboardEvent(kind: .mouseActivity, modifiers: modifiers))
             }
@@ -314,6 +393,7 @@ final class EventMonitor {
         snapshotHeldKeys()
         CGEvent.tapEnable(tap: tap, enable: true)
         isRunning = CGEvent.tapIsEnabled(tap: tap)
+        if isRunning { startStaleStateTimer() }
         onStatusChange(
             isRunning
                 ? "Monitoring recovered after an event-tap timeout."
@@ -330,6 +410,20 @@ final class EventMonitor {
         CGEventSource.keyState(.hidSystemState, key: 58)
             || CGEventSource.keyState(.hidSystemState, key: 61)
             || CGEventSource.flagsState(.hidSystemState).contains(.maskAlternate)
+    }
+
+    private static var physicalKeysAreReleased: Bool {
+        // Caps Lock is a toggle. All ordinary keys, sided modifiers, and physical Fn
+        // must be released before repairing state; held keys must never create a new tap.
+        let modifierFlags: CGEventFlags = [
+            .maskShift, .maskControl, .maskAlternate, .maskCommand, .maskSecondaryFn,
+        ]
+        guard CGEventSource.flagsState(.hidSystemState).intersection(modifierFlags).isEmpty else {
+            return false
+        }
+        return !(UInt16(0)...127).contains { code in
+            code != 57 && CGEventSource.keyState(.hidSystemState, key: code)
+        }
     }
 
     static func modifiers(from flags: CGEventFlags, physicalFunctionDown: Bool? = nil) -> KeyModifiers {

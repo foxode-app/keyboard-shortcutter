@@ -11,6 +11,7 @@ import ShortcutCore
 final class ActionExecutor {
     private let handlers: [String: any ActionHandler]
     private let shortcutHandler: SendShortcutActionHandler
+    private let activationRecovery: InputMethodActivationRecovery
     private var executionGeneration = 0
 
     static var accessibilityPermissionGranted: Bool { AXIsProcessTrusted() && CGPreflightPostEventAccess() }
@@ -24,12 +25,16 @@ final class ActionExecutor {
     init(
         inputSourceService: any InputSourceSelecting,
         systemActionSender: SystemActionSender? = nil,
-        shortcutHandler: SendShortcutActionHandler? = nil
+        shortcutHandler: SendShortcutActionHandler? = nil,
+        activationRecovery: InputMethodActivationRecovery? = nil
     ) {
         let sender = shortcutHandler ?? SendShortcutActionHandler()
+        let recovery = activationRecovery ?? InputMethodActivationRecovery(service: inputSourceService)
         self.shortcutHandler = sender
+        self.activationRecovery = recovery
         handlers = [
-            "inputSource": InputSourceActionHandler(service: inputSourceService, sender: sender),
+            "inputSource": InputSourceActionHandler(
+                service: inputSourceService, sender: sender, recovery: recovery),
             "launchApplication": LaunchApplicationActionHandler(),
             "openURL": OpenURLActionHandler(),
             "sendShortcut": sender,
@@ -60,13 +65,17 @@ final class ActionExecutor {
 
     /// Feed events before matching rules so a shortcut action knows which physical keys remain held.
     func observe(_ event: KeyboardEvent) {
-        if event.kind == .reset { executionGeneration &+= 1 }
+        if event.kind == .reset {
+            executionGeneration &+= 1
+            activationRecovery.cancel()
+        }
         shortcutHandler.observe(event)
     }
 
     func cancelPendingAction() {
         executionGeneration &+= 1
         shortcutHandler.cancelPendingAction()
+        activationRecovery.cancel()
     }
 }
 
@@ -103,10 +112,15 @@ private final class SystemActionHandler: ActionHandler {
 private final class InputSourceActionHandler: ActionHandler {
     let service: any InputSourceSelecting
     let sender: SendShortcutActionHandler
+    let recovery: InputMethodActivationRecovery
 
-    init(service: any InputSourceSelecting, sender: SendShortcutActionHandler) {
+    init(
+        service: any InputSourceSelecting, sender: SendShortcutActionHandler,
+        recovery: InputMethodActivationRecovery
+    ) {
         self.service = service
         self.sender = sender
+        self.recovery = recovery
     }
 
     func execute(_ action: ShortcutAction, completion: @escaping (Result<Void, Error>) -> Void) {
@@ -115,16 +129,26 @@ private final class InputSourceActionHandler: ActionHandler {
                 .failure(ActionFailure("Choose an installed input source for this mapping in Settings.")))
             return
         }
-        // A later source request replaces any action waiting for physical release.
+        // A later source request replaces any action waiting for physical release,
+        // and a different source also replaces an unconfirmed Japanese switch.
         sender.cancelPendingAction()
-        guard service.enumerate().contains(where: { $0.id == id }) else {
+        if recovery.pendingTargetID != id { recovery.cancel() }
+        let sources = service.enumerate()
+        guard let target = sources.first(where: { $0.id == id }) else {
             completion(.failure(InputSourceService.Failure.missingSource(id)))
             return
         }
-        // Additional Kana or mode-switch key events can become text, editor commands,
-        // or an unhandled-key alert. Select the source without sending keyboard input.
+        // Select with TIS only. Kana is sent solely by the recovery after it reselects ASCII;
+        // sent while Japanese is selected, it becomes text, editor commands, or an alert.
         sender.runAfterRelease(
-            { [service] in try service.select(id: id) }, completion: completion)
+            { [service, recovery] in
+                // Repeating the request joins the running check. Reselecting now would add
+                // the rapid back-to-back change that most reliably leaves a client stale.
+                guard recovery.pendingTargetID != id else { return }
+                let previousID = service.currentSourceID()
+                try service.select(id: id)
+                recovery.watch(target, after: sources.first { $0.id == previousID })
+            }, completion: completion)
     }
 }
 

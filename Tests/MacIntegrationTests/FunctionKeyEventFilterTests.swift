@@ -96,6 +96,20 @@ final class FunctionKeyEventFilterTests: XCTestCase {
             filter.shouldConsume(try event(type: .keyUp), type: .keyUp, enabled: true, matched: false))
     }
 
+    func testFreshUnmatchedPressAfterLostReleaseDoesNotInheritOldOwnership() throws {
+        var filter = FunctionKeyEventFilter()
+        XCTAssertTrue(filter.shouldConsume(try event(), type: .keyDown, enabled: true, matched: true))
+        XCTAssertTrue(filter.shouldConsume(try event(109), type: .keyDown, enabled: true, matched: true))
+        filter.releaseOwnership(of: 101)
+        XCTAssertFalse(
+            filter.shouldConsume(
+                try event(flags: .maskCommand), type: .keyDown, enabled: true, matched: false))
+        XCTAssertFalse(
+            filter.shouldConsume(try event(type: .keyUp), type: .keyUp, enabled: true, matched: false))
+        XCTAssertTrue(
+            filter.shouldConsume(try event(109, type: .keyUp), type: .keyUp, enabled: true, matched: false))
+    }
+
     func testSyntheticEventsBypassWithoutReleasingPhysicalOwnership() throws {
         var filter = FunctionKeyEventFilter()
         XCTAssertFalse(

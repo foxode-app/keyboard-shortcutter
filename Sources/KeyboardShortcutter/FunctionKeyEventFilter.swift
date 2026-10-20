@@ -12,6 +12,9 @@ struct FunctionKeyEventFilter {
 
     mutating func reset() { consumedKeys.removeAll(keepingCapacity: true) }
 
+    /// A fresh physical press after idle reconciliation cannot belong to the lost release.
+    mutating func releaseOwnership(of keyCode: UInt16) { consumedKeys.remove(keyCode) }
+
     mutating func shouldConsume(
         _ event: CGEvent, type: CGEventType, enabled: Bool, matched: Bool
     ) -> Bool {

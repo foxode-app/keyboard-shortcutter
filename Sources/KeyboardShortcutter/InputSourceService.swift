@@ -5,6 +5,8 @@ import Foundation
 protocol InputSourceSelecting {
     func enumerate() -> [InputSourceService.Source]
     func select(id: String) throws
+    /// The keyboard input source macOS reports as selected; a focused client can lag behind it.
+    func currentSourceID() -> String?
 }
 
 @MainActor
@@ -14,7 +16,7 @@ final class InputSourceService: InputSourceSelecting {
         let name: String
         let languages: [String]
         var inputModeID: String? = nil
-
+        var isASCIICapableLayout = false
     }
 
     enum Failure: LocalizedError {
@@ -40,8 +42,17 @@ final class InputSourceService: InputSourceSelecting {
             else { return nil }
             let languages: [String] = property(source, kTISPropertyInputSourceLanguages) ?? []
             let inputModeID: String? = property(source, kTISPropertyInputModeID)
-            return Source(id: id, name: name, languages: languages, inputModeID: inputModeID)
+            let type: String? = property(source, kTISPropertyInputSourceType)
+            let isASCIICapable: Bool = property(source, kTISPropertyInputSourceIsASCIICapable) ?? false
+            return Source(
+                id: id, name: name, languages: languages, inputModeID: inputModeID,
+                isASCIICapableLayout: isASCIICapable && type == kTISTypeKeyboardLayout as String)
         }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    func currentSourceID() -> String? {
+        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return nil }
+        return property(source, kTISPropertyInputSourceID)
     }
 
     func select(id: String) throws {
