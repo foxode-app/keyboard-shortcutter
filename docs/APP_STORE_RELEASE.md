@@ -58,7 +58,7 @@ Apple は [Sandbox と互換性のない機能](https://developer.apple.com/docu
 
 ## 検証状況
 
-- 2026年10月20日、1.1.7（ビルド9）で、英字配列→ひらがなの切り替えが前面アプリに反映されない場合の自動補正と、キー解放通知の欠落からの復旧（未公開の1.1.6の修正）を追加。自動テスト146件（純粋ロジック51件、macOS統合95件）、lint、Developer ID署名付きビルドが成功した。テスト用のAppKit入力欄と一時プロファイルのChromeでの自動操作は、右Option単独と左Option→右Optionでそれぞれ24回中24回成功した。これは非Sandbox版での確認であり、Sandbox適合や審査承認を示さない。1.1.7はDeveloper ID署名・Apple公証・Gatekeeper検証済みのDMGとしてGitHub Releasesで配布する。
+- 2026年10月20日、1.1.7（ビルド9）で、英字配列→ひらがなの切り替えが前面アプリに反映されない場合の自動補正と、キー解放通知の欠落からの復旧（未公開の1.1.6の修正）を追加。自動テスト146件（純粋ロジック51件、macOS統合95件）、lint、Developer ID署名付きビルドが成功した。テスト用のAppKit入力欄と一時プロファイルのChromeで右Option単独と左Option→右Optionを自動操作し、AppKit・Chromeとも24回中24回成功した。これは非Sandbox版での確認であり、Sandbox適合や審査承認を示さない。1.1.7はDeveloper ID署名・Apple公証・Gatekeeper検証済みのDMGとしてGitHub Releasesで配布する。
 - 2026年10月16日、1.1.5（ビルド7）で入力ソース操作の擬似キー送信を除去。自動テスト128件（純粋ロジック51件、macOS統合77件）、lint、Developer ID署名付きビルドが成功した。
 - `/Applications` への適用後、監視中と設定ファイルのハッシュ一致を確認。macOS 27.0.1 / Apple SiliconのCodexで、利用者が右Alt→`aiu` により警告音・余分な空白なしで「あいう」へ変換されることを確認した。これは非Sandbox版の当該入力欄での確認であり、Sandbox適合や審査承認を示さない。1.1.5はDeveloper ID署名・Apple公証・Gatekeeper検証済みのDMGとしてGitHub Releasesで配布した。
 - 未公開の1.1.4は右Optionで警告音が鳴るとの報告を受けて採用を中止した。

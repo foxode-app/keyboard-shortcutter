@@ -2,7 +2,7 @@
 
 対象は Apple Silicon（arm64）/ macOS 13 以降です。正式な Bundle ID は `com.foxode.keyboardshortcutter.app`、現在の直接配布用ビルドは1.1.7（ビルド9）です。App Sandbox は使いません。最小対応 OS 上での実機検証は未実施です。
 
-2026-10-20時点で、1.1.7の自動テスト146件（純粋ロジック51件、macOS統合95件）、lint、Developer ID署名付きビルドが成功しています。`/Applications` への適用後、監視中と既存設定のハッシュ一致を確認しました。macOS 27.0.1 / Apple Siliconで、テスト用のAppKit入力欄と一時プロファイルのChromeに対し、1.1.7本体経由で右Option単独と左Option→右Optionを自動操作し、それぞれ24回中24回「あいう」になりました。Codexでの実操作、他の入力先・IME・キーボード配列や全操作条件の確認ではありません。1.1.7の配布用アプリとDMGのApple公証が成功し、署名・公証チケット・Gatekeeperを検証しています。GitHub Releasesで配布します。
+2026-10-20時点で、1.1.7の自動テスト146件（純粋ロジック51件、macOS統合95件）、lint、Developer ID署名付きビルドが成功しています。`/Applications` への適用後、監視中と既存設定のハッシュ一致を確認しました。macOS 27.0.1 / Apple Siliconで、テスト用のAppKit入力欄と一時プロファイルのChromeに対し、1.1.7本体経由で右Option単独と左Option→右Optionを自動操作し、AppKit・Chromeとも24回中24回「あいう」になりました。Codexでの実操作、他の入力先・IME・キーボード配列や全操作条件の確認ではありません。1.1.7の配布用アプリとDMGのApple公証が成功し、署名・公証チケット・Gatekeeperを検証しています。GitHub Releasesで配布します。
 
 ## ビルドと署名
 
